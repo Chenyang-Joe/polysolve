@@ -14,7 +14,11 @@
 #include <jse/jse.h>
 
 #include <spdlog/spdlog.h>
+#if defined(SPDLOG_FMT_EXTERNAL)
+#include <fmt/color.h>
+#else
 #include <spdlog/fmt/bundled/color.h>
+#endif
 #include <spdlog/fmt/ostr.h>
 
 #include <finitediff.hpp>
@@ -279,7 +283,7 @@ namespace polysolve::nonlinear
 
         m_logger.debug(
             "Starting {} with {} solve f₀={:g} (stopping criteria: {})",
-            descent_strategy_name(), m_line_search->name(), objFunc(x), m_stop);
+            descent_strategy_name(), m_line_search->name(), objFunc(x), m_stop.print_message());
 
         update_solver_info(objFunc(x));
         objFunc.post_step(PostStepData(m_current.iterations, solver_info, x, grad));
@@ -350,12 +354,12 @@ namespace polysolve::nonlinear
                     m_status = Status::UpdateDirectionFailed;
                     log_and_throw_error(
                         m_logger, "[{}][{}] {} on last strategy; stopping",
-                        current_name, m_line_search->name(), m_status);
+                        current_name, m_line_search->name(), status_message(m_status));
                 }
 
                 m_logger.debug(
                     "[{}][{}] {}; reverting to {}", current_name, m_line_search->name(),
-                    Status::UpdateDirectionFailed, descent_strategy_name());
+                    status_message(Status::UpdateDirectionFailed), descent_strategy_name());
                 m_status = Status::Continue;
                 continue;
             }
@@ -374,7 +378,7 @@ namespace polysolve::nonlinear
                     m_status = Status::NotDescentDirection;
                     log_and_throw_error(
                         m_logger, "[{}][{}] {} on last strategy (‖Δx‖={:g}; ‖g‖={:g}; Δx⋅g={:g}≥0); stopping",
-                        current_name, m_line_search->name(), m_status, delta_x.norm(), compute_grad_norm(x, grad),
+                        current_name, m_line_search->name(), status_message(m_status), delta_x.norm(), compute_grad_norm(x, grad),
                         m_current.xDeltaDotGrad);
                 }
                 else
@@ -382,7 +386,7 @@ namespace polysolve::nonlinear
                     m_status = Status::Continue;
                     m_logger.debug(
                         "[{}][{}] {} (‖Δx‖={:g}; ‖g‖={:g}; Δx⋅g={:g}≥0); reverting to {}",
-                        current_name, m_line_search->name(), Status::NotDescentDirection,
+                        current_name, m_line_search->name(), status_message(Status::NotDescentDirection),
                         delta_x.norm(), compute_grad_norm(x, grad), m_current.xDeltaDotGrad,
                         descent_strategy_name());
                 }
@@ -427,7 +431,13 @@ namespace polysolve::nonlinear
                 continue;
             }
 
-            x += rate * delta_x;
+            {
+                TVector x1 = x + rate * delta_x;
+                if (objFunc.after_line_search_custom_operation(x, x1))
+                    objFunc.solution_changed(x1);
+                x = x1;
+            }
+
             old_energy = energy;
 
             // Reset this for the next iterations
@@ -473,7 +483,7 @@ namespace polysolve::nonlinear
 
             m_logger.debug(
                 "[{}][{}] {} (stopping criteria: {})",
-                descent_strategy_name(), m_line_search->name(), m_current, m_stop);
+                descent_strategy_name(), m_line_search->name(), m_current.print_message(), m_stop.print_message());
 
             if (++m_current.iterations >= m_stop.iterations)
                 m_status = Status::IterationLimit;
@@ -495,8 +505,8 @@ namespace polysolve::nonlinear
         m_logger.log(
             succeeded ? spdlog::level::info : spdlog::level::err,
             "[{}][{}] Finished: {} took {:g}s ({}) (stopping criteria: {})",
-            descent_strategy_name(), m_line_search->name(), m_status, tot_time,
-            m_current, m_stop);
+            descent_strategy_name(), m_line_search->name(), status_message(m_status), tot_time,
+            m_current.print_message(), m_stop.print_message());
 
         log_times();
         update_solver_info(objFunc(x));
@@ -574,6 +584,7 @@ namespace polysolve::nonlinear
     void Solver::verify_gradient(Problem &objFunc, const TVector &x, const TVector &grad)
     {
         bool match = false;
+        double J = objFunc(x);
 
         switch (gradient_fd_strategy)
         {
@@ -591,16 +602,18 @@ namespace polysolve::nonlinear
             objFunc.solution_changed(x1);
             double J1 = objFunc(x1);
 
-            double fd = (J2 - J1) / 2 / gradient_fd_eps;
+            double fd_centered = (J2 - J1) / 2 / gradient_fd_eps;
+            double fd_right = (J2 - J) / gradient_fd_eps;
+            double fd_left = (J - J1) / gradient_fd_eps;
             double analytic = direc.dot(grad);
 
-            match = abs(fd - analytic) < 1e-8 || abs(fd - analytic) < 1e-4 * abs(analytic);
+            match = abs(fd_centered - analytic) < 1e-8 || abs(fd_centered - analytic) < 1e-4 * abs(analytic);
 
             // Log error in either case to make it more visible in the logs.
             if (match)
-                m_logger.debug("step size: {}, finite difference: {}, derivative: {}", gradient_fd_eps, fd, analytic);
+                m_logger.debug("step size: {}, finite difference: {} {} {}, derivative: {}", gradient_fd_eps, fd_centered, fd_left, fd_right, analytic);
             else
-                m_logger.error("step size: {}, finite difference: {}, derivative: {}", gradient_fd_eps, fd, analytic);
+                m_logger.error("step size: {}, finite difference: {} {} {}, derivative: {}", gradient_fd_eps, fd_centered, fd_left, fd_right, analytic);
         }
         break;
         case FiniteDiffStrategy::FULL_FINITE_DIFF:
