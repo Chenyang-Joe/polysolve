@@ -24,6 +24,7 @@ namespace polysolve
     StopWatch::~StopWatch()
     {
         stop();
+
     }
 
     void StopWatch::start()
@@ -54,7 +55,7 @@ namespace polysolve
     void StopWatch::log_msg()
     {
         const static auto log_fmt_text =
-            fmt::format("[{}] {{}} {{:.3g}}s", fmt::format(fmt::fg(fmt::terminal_color::magenta), "timing"));
+            fmt::format("[{}] {{}} {{:.5g}}s", fmt::format(fmt::fg(fmt::terminal_color::magenta), "timing"));
 
         if (!m_name.empty())
         {

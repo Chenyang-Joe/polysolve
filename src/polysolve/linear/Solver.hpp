@@ -126,6 +126,9 @@ namespace polysolve::linear
 
         /// @brief Name of the solver type (for debugging purposes)
         virtual std::string name() const { return ""; }
+
+
+        spdlog::logger *logger = nullptr;
     };
 
 } // namespace polysolve::linear

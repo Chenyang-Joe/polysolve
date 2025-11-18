@@ -58,6 +58,8 @@ namespace polysolve::linear
     {
         params["num_iterations"] = num_iterations;
         params["final_res_norm"] = final_res_norm;
+        params["solver_maxiter"] = max_iter_;
+        params["solver_tol"] = conv_tol_;
     }
 
     ////////////////////////////////////////////////////////////////////////////////

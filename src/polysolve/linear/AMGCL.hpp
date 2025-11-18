@@ -33,6 +33,8 @@
 #include <memory>
 #include <type_traits>
 
+#include "../Utils.hpp"
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // WARNING:
@@ -79,6 +81,8 @@ namespace polysolve::linear
         // Name of the solver type (for debugging purposes)
         virtual std::string name() const override { return "AMGCL_Block" + std::to_string(BLOCK_SIZE); }
 
+        void set_logger(spdlog::logger * logger);
+
     private:
         typedef amgcl::static_matrix<double, BLOCK_SIZE, BLOCK_SIZE> dmat_type; // matrix value type in double precision
         using Backend = amgcl::backend::builtin<dmat_type>;
@@ -93,6 +97,9 @@ namespace polysolve::linear
         // Output info
         size_t iterations_;
         double residual_error_;
+
+        // double total_time_block;
+        // std::shared_ptr<spdlog::logger> logger_block;
     };
 
     class AMGCL : public Solver
@@ -158,6 +165,9 @@ namespace polysolve::linear
 
         AMGCL_Block<2> block2_solver_;
         AMGCL_Block<3> block3_solver_;
+
+        double total_time;
+
     };
 
 } // namespace polysolve::linear

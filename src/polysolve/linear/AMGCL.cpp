@@ -5,6 +5,13 @@
 
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
+
+#include <iostream>
+#if defined(SPDLOG_FMT_EXTERNAL)
+#include <fmt/color.h>
+#else
+#include <spdlog/fmt/bundled/color.h>
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace polysolve::linear
@@ -66,6 +73,7 @@ namespace polysolve::linear
 
         void set_params(const json &params, json &out)
         {
+            
             if (params.contains("AMGCL"))
             {
                 // Patch the stored params with input ones
@@ -96,6 +104,7 @@ namespace polysolve::linear
 
     AMGCL::AMGCL()
     {
+
         params_ = default_params();
         // NOTE: usolver and psolver parameters are only used if the
         // preconditioner class is "schur_pressure_correction"
@@ -105,6 +114,7 @@ namespace polysolve::linear
     // Set solver parameters
     void AMGCL::set_parameters(const json &params)
     {
+
         if (params.contains("AMGCL"))
         {
             // Specially named parameters to match other solvers
@@ -115,11 +125,13 @@ namespace polysolve::linear
             if (block_size_ == 2)
             {
                 block2_solver_.set_parameters(params);
+                block2_solver_.set_logger(logger);
                 return;
             }
             else if (block_size_ == 3)
             {
                 block3_solver_.set_parameters(params);
+                block3_solver_.set_logger(logger);
                 return;
             }
 
@@ -141,12 +153,17 @@ namespace polysolve::linear
         }
         params["num_iterations"] = iterations_;
         params["final_res_norm"] = residual_error_;
+        params["solver_tol"] = params_["solver"]["tol"];
+        params["solver_maxiter"] = params_["solver"]["maxiter"];
     }
 
     ////////////////////////////////////////////////////////////////////////////////
 
     void AMGCL::factorize(const StiffnessMatrix &Ain)
     {
+
+        POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
+
         if (block_size_ == 2)
         {
             block2_solver_.factorize(Ain);
@@ -189,6 +206,8 @@ namespace polysolve::linear
 
     void AMGCL::solve(const Eigen::Ref<const VectorXd> rhs, Eigen::Ref<VectorXd> result)
     {
+        POLYSOLVE_SCOPED_STOPWATCH("solve", total_time, *logger);
+
         if (block_size_ == 2)
         {
             block2_solver_.solve(rhs, result);
@@ -209,17 +228,22 @@ namespace polysolve::linear
         std::tie(iterations_, residual_error_) = (*solver_)(*rhs_b, *x_b);
 
         std::copy(&(*x_b)[0], &(*x_b)[0] + result.size(), result.data());
+
     }
 
     ////////////////////////////////////////////////////////////////////////////////
 
     AMGCL::~AMGCL()
     {
+    // const static auto log_fmt_text_total_time =
+    // fmt::format("[{}] {{}} {{:.5g}}s", fmt::format(fmt::fg(fmt::terminal_color::magenta), "timing"));
+    // logger->trace(log_fmt_text_total_time, "summing_stopwatch_time", total_time);
     }
 
     template <int BLOCK_SIZE>
     AMGCL_Block<BLOCK_SIZE>::AMGCL_Block()
     {
+
         params_ = default_params();
 
         // NOTE: usolver and psolver parameters are only used if the
@@ -238,6 +262,8 @@ namespace polysolve::linear
     {
         params["num_iterations"] = iterations_;
         params["final_res_norm"] = residual_error_;
+        params["solver_tol"] = params_["solver"]["tol"];
+        params["solver_maxiter"] = params_["solver"]["maxiter"];
     }
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -245,6 +271,7 @@ namespace polysolve::linear
     template <int BLOCK_SIZE>
     void AMGCL_Block<BLOCK_SIZE>::factorize(const StiffnessMatrix &Ain)
     {
+
         assert(precond_num_ > 0);
 
         int numRows = Ain.rows();
@@ -281,6 +308,7 @@ namespace polysolve::linear
     template <int BLOCK_SIZE>
     void AMGCL_Block<BLOCK_SIZE>::solve(const Eigen::Ref<const VectorXd> rhs, Eigen::Ref<VectorXd> result)
     {
+
         assert(result.size() == rhs.size());
         std::vector<double> _rhs(rhs.data(), rhs.data() + rhs.size());
         std::vector<double> x(result.data(), result.data() + result.size());
@@ -300,10 +328,21 @@ namespace polysolve::linear
     template <int BLOCK_SIZE>
     AMGCL_Block<BLOCK_SIZE>::~AMGCL_Block()
     {
+
     }
+
+
+    template <int BLOCK_SIZE>
+    void AMGCL_Block<BLOCK_SIZE>::set_logger(spdlog::logger * logger)
+    {
+        this->logger = logger;
+    }
+
 
     template class AMGCL_Block<2>;
     template class AMGCL_Block<3>;
+
+
 } // namespace polysolve::linear
 
 #endif
