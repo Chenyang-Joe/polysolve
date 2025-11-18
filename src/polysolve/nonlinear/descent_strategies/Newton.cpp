@@ -217,9 +217,9 @@ namespace polysolve::nonlinear
 
 
         // Addon 3: log the sum of hessian and -grad for debugging
-        double hessian_sum = hessian.sum();
-        double grad_sum = -grad.sum();
-        m_logger.info("Hessian sum: {}, -grad sum: {}", hessian_sum, grad_sum);
+        // double hessian_sum = hessian.sum();
+        // double grad_sum = -grad.sum();
+        // m_logger.info("Hessian sum: {}, -grad sum: {}", hessian_sum, grad_sum);
 
         // Addon 4: test if the matrix passed to polyfem (not reloaded version, but the vanilla version)
         // can be solved by the same solver in polysolve integreated in the polyfem framework

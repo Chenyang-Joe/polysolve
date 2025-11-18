@@ -48,9 +48,9 @@ namespace polysolve::linear {
 #ifdef POLYSOLVE_WITH_SUPERLU
 #include <Eigen/SuperLUSupport>
 #endif
-// #ifdef POLYSOLVE_WITH_MKL
-// #include <Eigen/PardisoSupport>
-// #endif
+#ifdef POLYSOLVE_WITH_MKL
+#include <Eigen/PardisoSupport>
+#endif
 #ifdef POLYSOLVE_WITH_PARDISO
 #include "Pardiso.hpp"
 #endif
@@ -369,20 +369,20 @@ namespace polysolve::linear
         {
             RETURN_DIRECT_SOLVER_PTR(SPQR, "Eigen::SPQR");
 #endif
-// #ifdef POLYSOLVE_WITH_MKL
-//         }
-//         else if (solver == "Eigen::PardisoLLT")
-//         {
-//             RETURN_DIRECT_SOLVER_PTR(PardisoLLT, "Eigen::PardisoLLT");
-//         }
-//         else if (solver == "Eigen::PardisoLDLT")
-//         {
-//             RETURN_DIRECT_SOLVER_PTR(PardisoLDLT, "Eigen::PardisoLDLT");
-//         }
-//         else if (solver == "Eigen::PardisoLU")
-//         {
-//             RETURN_DIRECT_SOLVER_PTR(PardisoLU, "Eigen::PardisoLU");
-// #endif
+#ifdef POLYSOLVE_WITH_MKL
+        }
+        else if (solver == "Eigen::PardisoLLT")
+        {
+            RETURN_DIRECT_SOLVER_PTR(PardisoLLT, "Eigen::PardisoLLT");
+        }
+        else if (solver == "Eigen::PardisoLDLT")
+        {
+            RETURN_DIRECT_SOLVER_PTR(PardisoLDLT, "Eigen::PardisoLDLT");
+        }
+        else if (solver == "Eigen::PardisoLU")
+        {
+            RETURN_DIRECT_SOLVER_PTR(PardisoLU, "Eigen::PardisoLU");
+#endif
 #ifdef POLYSOLVE_WITH_PARDISO
         }
         else if (solver == "Pardiso")
