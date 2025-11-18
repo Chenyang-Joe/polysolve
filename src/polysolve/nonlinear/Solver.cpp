@@ -26,6 +26,8 @@
 #include <iomanip>
 #include <fstream>
 
+#include <polysolve/save_problem.hpp>
+
 namespace polysolve::nonlinear
 {
     namespace
@@ -288,8 +290,10 @@ namespace polysolve::nonlinear
         update_solver_info(objFunc(x));
         objFunc.post_step(PostStepData(m_current.iterations, solver_info, x, grad));
 
+
         do
         {
+
             m_line_search->set_is_final_strategy(m_descent_strategy == m_strategies.size() - 1);
 
             // --- Energy ------------------------------------------------------
@@ -335,7 +339,6 @@ namespace polysolve::nonlinear
                 break;
 
             // --- Update direction --------------------------------------------
-
             bool update_direction_successful;
             {
                 POLYSOLVE_SCOPED_STOPWATCH("compute update direction", update_direction_time, m_logger);

@@ -3,6 +3,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "EigenSolver.hpp"
 #include <iostream>
+#include <fstream>
+#include <type_traits>
+#ifdef POLYSOLVE_WITH_CHOLMOD
+#include <Eigen/CholmodSupport>
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -45,6 +50,7 @@ namespace polysolve::linear
     void EigenDirect<SparseSolver>::factorize(const StiffnessMatrix &A)
     {
         m_Solver.factorize(A);
+        
         if (m_Solver.info() == Eigen::NumericalIssue)
         {
             throw std::runtime_error("[EigenDirect] NumericalIssue encountered.");

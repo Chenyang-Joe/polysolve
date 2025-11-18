@@ -167,6 +167,12 @@ target_link_libraries(polysolve PUBLIC polysolve_coverage_config)
 target_compile_features(polysolve_linear PUBLIC cxx_std_17)
 target_compile_features(polysolve PUBLIC cxx_std_17)
 
+# Add save_problem files to make benchy::io available in the main polysolve target
+target_sources(polysolve PRIVATE 
+    src/polysolve/save_problem.cpp
+    src/polysolve/save_problem.hpp
+)
+
 # Public include directory for Polysolve
 target_include_directories(polysolve_linear PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(polysolve PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -346,7 +352,6 @@ endif()
 # Extra warnings (include last for highest priority)
 include(polysolve_warnings)
 target_link_libraries(polysolve PRIVATE polysolve::warnings)
-
 
 ################################################################################
 # Compiler options

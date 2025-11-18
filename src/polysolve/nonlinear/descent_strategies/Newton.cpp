@@ -8,6 +8,8 @@
 #include <spdlog/fmt/bundled/color.h>
 #endif
 
+#include <polysolve/save_problem.hpp>
+
 namespace polysolve::nonlinear
 {
 
@@ -166,13 +168,84 @@ namespace polysolve::nonlinear
                                               const TVector &x,
                                               const TVector &grad,
                                               TVector &direction)
-    {
+    {        
         polysolve::StiffnessMatrix hessian;
+
+        // Eigen::SparseMatrix<double> hessian;
 
         {
             POLYSOLVE_SCOPED_STOPWATCH("assembly time", this->assembly_time, m_logger);
             compute_hessian(objFunc, x, hessian);
         }
+
+        // Addon 1: manually save the hessian and grad for analysis
+		benchy::io::Problem<double> probleminfo;
+		probleminfo.A = hessian;
+		probleminfo.b = -grad;
+		benchy::io::iter_global++;  // starts from 1
+		std::cout << "TIME STEP: " << benchy::io::ts_global << " ITER: " << benchy::io::iter_global << std::endl;
+		// probleminfo.nullspace = remove_boundary_vertices(test_vertices, test_boundary_nodes);
+		benchy::io::save_problem(probleminfo);
+
+        
+        // Addon 2: load the matrix and vector that can be solved by Eigen::CholmodSupernodalLLT solely
+        // and test if it can be solved by the same solver in polysolve integreated in the polyfem framework
+        // std::cout << "Testing loading matrix and vector using save_problem.hpp functions" << std::endl;
+        // std::string matrix_file = "/u/1/chenyang/mat_analysis/data/A_sonic.bin";
+        // std::string vector_file = "/u/1/chenyang/mat_analysis/data/1_1_b.bin";
+        // SparseMatrix<double> A;
+        // int dim_local, is_spd, is_sequence;
+        // benchy::io::Deserialize<double, ColMajor, int>(A, dim_local, is_spd, is_sequence, matrix_file);
+        // MatrixXd b_matrix;
+        // benchy::io::ReadMat(b_matrix, vector_file);
+        // VectorXd b = b_matrix.col(0);
+        // json temp_solver_params_0 = R"({"solver": "Eigen::CholmodSupernodalLLT"})"_json;
+        // std::shared_ptr<polysolve::linear::Solver> temp_solver_0 = polysolve::linear::Solver::create(temp_solver_params_0, m_logger, false);
+        // try{
+        //     temp_solver_0->analyze_pattern(A, A.rows());
+        //     temp_solver_0->factorize(A);
+        //     VectorXd x0(b.size());
+        //     temp_solver_0->solve(b, x0); // A x = b
+        //     double temp_residual_0 = (A * x0 - b).norm(); // A x - b = 0
+        //     m_logger.info("TestPolysolve solve successful, residual: {}", temp_residual_0);
+        // }
+        // catch (const std::runtime_error &err) {
+        //     m_logger.warn("TestPolysolve factorization failed: {}", err.what());
+        // }
+
+
+
+
+        // Addon 3: log the sum of hessian and -grad for debugging
+        double hessian_sum = hessian.sum();
+        double grad_sum = -grad.sum();
+        m_logger.info("Hessian sum: {}, -grad sum: {}", hessian_sum, grad_sum);
+
+        // Addon 4: test if the matrix passed to polyfem (not reloaded version, but the vanilla version)
+        // can be solved by the same solver in polysolve integreated in the polyfem framework
+        // double verification_time = 0;
+        // {
+        //     POLYSOLVE_SCOPED_STOPWATCH("test Eigen::CholmodSupernodalLLT", verification_time, m_logger);
+
+        //     m_logger.info("Testing Eigen::CholmodSupernodalLLT solver compatibility");
+        //     json temp_solver_params = R"({"solver": "Eigen::CholmodSupernodalLLT"})"_json;
+        //     std::shared_ptr<polysolve::linear::Solver> temp_solver = polysolve::linear::Solver::create(temp_solver_params, m_logger, false);
+            
+        //     try {
+        //         temp_solver->analyze_pattern(hessian, hessian.rows());
+        //         temp_solver->factorize(hessian);
+        //         VectorXd x(grad.size());
+        //         temp_solver->solve(-grad, x); // H Δx = -g
+        //         double temp_residual = (hessian * x + grad).norm(); // H Δx + g = 0
+        //         m_logger.info("Eigen::CholmodSupernodalLLT solve successful, residual: {}", temp_residual);
+                
+        //     }
+        //     catch (const std::runtime_error &err) {
+        //         m_logger.warn("Eigen::CholmodSupernodalLLT factorization failed: {}", err.what());
+        //     }
+        // }
+        // m_logger.info("verification time: {}", verification_time);
+
 
         {
             POLYSOLVE_SCOPED_STOPWATCH("linear solve", this->inverting_time, m_logger);
@@ -192,6 +265,8 @@ namespace polysolve::nonlinear
                 return std::nan("");
             }
 
+
+            
             linear_solver->solve(-grad, direction); // H Δx = -g
         }
 
