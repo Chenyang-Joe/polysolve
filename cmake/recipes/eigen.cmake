@@ -13,7 +13,7 @@ if(TARGET Eigen3::Eigen)
     return()
 endif()
 
-option(EIGEN_WITH_MKL "Use Eigen with MKL" ON)
+option(EIGEN_WITH_MKL "Use Eigen with MKL" OFF)
 option(EIGEN_DONT_VECTORIZE "Disable Eigen vectorization" OFF)
 option(EIGEN_MPL2_ONLY "Enable Eigen MPL2 license only" OFF)
 
