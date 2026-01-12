@@ -83,6 +83,7 @@ option(POLYSOLVE_WITH_PARDISO       "Enable Pardiso library"                    
 option(POLYSOLVE_WITH_HYPRE         "Enable hypre"                                       ON)
 option(POLYSOLVE_WITH_AMGCL         "Use AMGCL"                                          ON)
 option(POLYSOLVE_WITH_SPECTRA       "Enable Spectra library"                             ON)
+option(POLYSOLVE_WITH_TRILINOS      "Enable Trilinos"                                    ON)
 
 # Sanitizer options
 option(POLYSOLVE_SANITIZE_ADDRESS   "Sanitize Address"                                  OFF)
@@ -288,6 +289,29 @@ if(POLYSOLVE_WITH_AMGCL)
     include(amgcl)
     target_link_libraries(polysolve_linear PUBLIC amgcl::amgcl)
     target_compile_definitions(polysolve_linear PUBLIC POLYSOLVE_WITH_AMGCL)
+endif()
+
+# Trilinos
+if (POLYSOLVE_WITH_TRILINOS)
+    set(CMAKE_PREFIX_PATH "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib")
+    set(CMAKE_C_COMPILER ${mpi_cc})
+    set(CMAKE_CXX_COMPILER ${mpi_cxx})
+    # Specify Trilinos installation directory (set before find_package)
+    set(Trilinos_DIR "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib/cmake/Trilinos")
+    find_package(Trilinos REQUIRED COMPONENTS ML Epetra)# Only for local build, fix it when publish 
+    MESSAGE("\nFound Trilinos!  Here are the details: ")
+    MESSAGE("   Trilinos_DIR = ${Trilinos_DIR}")
+    MESSAGE("   Trilinos_VERSION = ${Trilinos_VERSION}")
+    MESSAGE("   Trilinos_PACKAGE_LIST = ${Trilinos_PACKAGE_LIST}")
+    MESSAGE("   Trilinos_LIBRARIES = ${Trilinos_LIBRARIES}")
+    MESSAGE("   Trilinos_INCLUDE_DIRS = ${Trilinos_INCLUDE_DIRS}")
+    MESSAGE("   Trilinos_TPL_LIST = ${Trilinos_TPL_LIST}")
+    MESSAGE("   Trilinos_TPL_LIBRARIES = ${Trilinos_TPL_LIBRARIES}")
+    MESSAGE("   Trilinos_BUILD_SHARED_LIBS = ${Trilinos_BUILD_SHARED_LIBS}")
+    MESSAGE("End of Trilinos details\n")   
+    target_link_libraries(polysolve_linear PUBLIC ${Trilinos_LIBRARIES})
+    target_include_directories(polysolve_linear PUBLIC ${Trilinos_INCLUDE_DIRS})
+    target_compile_definitions(polysolve_linear PUBLIC POLYSOLVE_WITH_TRILINOS)
 endif()
 
 # Spectra (MPL 2.0)
