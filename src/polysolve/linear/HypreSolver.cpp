@@ -5,6 +5,12 @@
 
 #include <HYPRE_krylov.h>
 #include <HYPRE_utilities.h>
+
+#if defined(SPDLOG_FMT_EXTERNAL)
+#include <fmt/color.h>
+#else
+#include <spdlog/fmt/bundled/color.h>
+#endif
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace polysolve::linear
@@ -66,6 +72,7 @@ namespace polysolve::linear
 
     void HypreSolver::factorize(const StiffnessMatrix &Ain)
     {
+        POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
         assert(precond_num_ > 0);
 
         if (has_matrix_)
@@ -187,6 +194,7 @@ namespace polysolve::linear
 
     void HypreSolver::solve(const Eigen::Ref<const VectorXd> rhs, Eigen::Ref<VectorXd> result)
     {
+        POLYSOLVE_SCOPED_STOPWATCH("solve", total_time, *logger);
         HYPRE_IJVector b;
         HYPRE_ParVector par_b;
         HYPRE_IJVector x;

@@ -32,6 +32,7 @@
 #include "ml_epetra.h"
 #include <fstream>
 
+#include "../Utils.hpp"
 ////////////////////////////////////////////////////////////////////////////////
 //
 // WARNING:
@@ -91,6 +92,7 @@ namespace polysolve::linear
     private:
         int precond_num_;
         Epetra_CrsMatrix *A=NULL;
+        double total_time;
 #ifdef HAVE_MPI
         Epetra_MpiComm *CommPtr;
 #else

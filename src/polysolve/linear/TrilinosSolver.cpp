@@ -5,6 +5,12 @@
 #include <string>
 #include <vector>
 #include <unsupported/Eigen/SparseExtra>
+
+#if defined(SPDLOG_FMT_EXTERNAL)
+#include <fmt/color.h>
+#else
+#include <spdlog/fmt/bundled/color.h>
+#endif
 /////////////////////////////////s///////////////////////////////////////////////
 
 namespace polysolve::linear
@@ -151,11 +157,14 @@ namespace polysolve::linear
     {
         params["num_iterations"] = iterations_;
         params["final_res_norm"] = residual_error_;
+        params["solver_tol"] = conv_tol_;
+        params["solver_maxiter"] = max_iter_;
     }
 
     /////////////////////////////////////////////////
     void TrilinosSolver::factorize(const StiffnessMatrix &Ain)
     {
+        POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
         assert(precond_num_ > 0);
         // Eigen::saveMarket(Ain,"/home/yiwei/matrix_struct/A_nonLinear.mtx");
         // Eigen::saveMarket(test_vertices,"/home/yiwei/matrix_struct/vec.mtx");
@@ -222,6 +231,7 @@ namespace polysolve::linear
 
     void TrilinosSolver::solve(const Eigen::Ref<const VectorXd> rhs, Eigen::Ref<VectorXd> result)
     {
+        POLYSOLVE_SCOPED_STOPWATCH("solve", total_time, *logger);
         int output=10; //how often to print residual history
         Teuchos::ParameterList MLList;
         TrilinosML_SetDefaultOptions(MLList);

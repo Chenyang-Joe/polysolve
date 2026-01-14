@@ -11,6 +11,7 @@
 #include <HYPRE_parcsr_ls.h>
 #include <HYPRE_parcsr_mv.h>
 
+#include "../Utils.hpp"
 ////////////////////////////////////////////////////////////////////////////////
 //
 // https://computation.llnl.gov/sites/default/files/public/hypre-2.11.2_usr_manual.pdf
@@ -68,6 +69,8 @@ namespace polysolve::linear
 
         HYPRE_IJMatrix A;
         HYPRE_ParCSRMatrix parcsr_A;
+        
+        double total_time;
     };
 
 } // namespace polysolve::linear
