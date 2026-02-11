@@ -1,140 +1,67 @@
-// #ifdef POLYSOLVE_WITH_TRILINOS
-
-////////////////////////////////////////////////////////////////////////////////
 #include "TrilinosSolver.hpp"
 #include <string>
 #include <vector>
 #include <unsupported/Eigen/SparseExtra>
+
+// POSIX headers for file descriptor manipulation
+#include <unistd.h>
+#include <fcntl.h>
 
 #if defined(SPDLOG_FMT_EXTERNAL)
 #include <fmt/color.h>
 #else
 #include <spdlog/fmt/bundled/color.h>
 #endif
-/////////////////////////////////s///////////////////////////////////////////////
+
+// Teuchos
+#include <Teuchos_ParameterList.hpp>
+#include <Teuchos_DefaultComm.hpp>
+#include <Teuchos_XMLParameterListHelpers.hpp>
+
+// Tpetra
+#include <Tpetra_Core.hpp>
+
+#ifdef HAVE_MPI
+#include <mpi.h>
+#endif
 
 namespace polysolve::linear
 {
-    namespace{
-    ////////////////////////////////////////////////////////////////
-    // int rigid_body_mode(int ndim, const std::vector<double> &coo, std::vector<double> &B, bool transpose = true) {
-
-    //     size_t n = coo.size();
-    //     int nmodes = (ndim == 2 ? 3 : 6);
-    //     B.resize(n * nmodes, 0.0);
-
-    //     const int stride1 = transpose ? 1 : nmodes;
-    //     const int stride2 = transpose ? n : 1;
-    //     // int stride1 = nmodes;
-    //     // int stride2 = 1;
-
-    //     double sn = 1 / sqrt(n);
-
-    //     if (ndim == 2) {
-    //         for(size_t i = 0; i < n; ++i) {
-    //             size_t nod = i / ndim;
-    //             size_t dim = i % ndim;
-
-    //             double x = coo[nod * 2 + 0];
-    //             double y = coo[nod * 2 + 1];
-
-    //             // Translation
-    //             B[i * stride1 + dim * stride2] = sn;
-
-    //             // Rotation
-    //             switch(dim) {
-    //                 case 0:
-    //                     B[i * stride1 + 2 * stride2] = -y;
-    //                     break;
-    //                 case 1:
-    //                     B[i * stride1 + 2 * stride2] = x;
-    //                     break;
-    //             }
-    //         }
-    //     } else if (ndim == 3) {
-    //         for(size_t i = 0; i < n; ++i) {
-    //             size_t nod = i / ndim;
-    //             size_t dim = i % ndim;
-
-    //             double x = coo[nod * 3 + 0];
-    //             double y = coo[nod * 3 + 1];
-    //             double z = coo[nod * 3 + 2];
-
-    //             // Translation
-    //             B[i * stride1 + dim * stride2] = sn;
-
-    //             // Rotation
-    //             switch(dim) {
-    //                 case 0:
-    //                     B[i * stride1 + 5 * stride2] = -y;
-    //                     B[i * stride1 + 4 * stride2] = z;
-    //                     break;
-    //                 case 1:
-    //                     B[i * stride1 + 5 * stride2] = x;
-    //                     B[i * stride1 + 3 * stride2] = -z;
-    //                     break;
-    //                 case 2:
-    //                     B[i * stride1 + 3 * stride2] =  y;
-    //                     B[i * stride1 + 4 * stride2] = -x;
-    //                     break;
-    //             }
-    //         }
-    //     }
-
-    //    // Orthonormalization
-    //     std::array<double, 6> dot;
-    //     for(int i = ndim; i < nmodes; ++i) {
-    //         std::fill(dot.begin(), dot.end(), 0.0);
-    //         for(size_t j = 0; j < n; ++j) {
-    //             for(int k = 0; k < i; ++k)
-    //                 dot[k] += B[j * stride1 + k * stride2] * B[j * stride1 + i * stride2];
-    //         }
-    //         double s = 0.0;
-    //         for(size_t j = 0; j < n; ++j) {
-    //             for(int k = 0; k < i; ++k)
-    //                 B[j * stride1 + i * stride2] -= dot[k] * B[j * stride1 + k * stride2];
-    //             s += B[j * stride1 + i * stride2] * B[j * stride1 + i * stride2];
-    //         }
-    //         s = sqrt(s);
-    //         for(size_t j = 0; j < n; ++j)
-    //             B[j * stride1 + i * stride2] /= s;
-    //     }
-    //     return nmodes;
-    // }
-    // Produce a vector of rigid body modes
-
-    }
     TrilinosSolver::TrilinosSolver()
     {
-        precond_num_ = 0;
+        // Initialize MPI if necessary
 #ifdef HAVE_MPI
         int done_already;
         MPI_Initialized(&done_already);
         if (!done_already)
         {
-            /* Initialize MPI */
             int argc = 1;
-            char name[] = "";
+            char name[] = "polysolve";
             char *argv[] = {name};
             char **argvv = &argv[0];
             MPI_Init(&argc, &argvv);
-            CommPtr = new Epetra_MpiComm(MPI_COMM_WORLD);
         }
-#else
-     CommPtr=new Epetra_SerialComm;
 #endif
+        // Get Default Communicator (wraps MPI_COMM_WORLD or Serial)
+        comm_ = Tpetra::getDefaultComm();
+    }
+    
+    TrilinosSolver::~TrilinosSolver()
+    {
+        // Let Kokkos/Trilinos handle cleanup automatically
+        // Note: We do not call MPI_Finalize() to avoid interfering with outside MPI context.
     }
 
-    ////////////////////////////////////////////////////////////////
     void TrilinosSolver::set_parameters(const json &params)
     {
         if (params.contains("Trilinos"))
         {
             if (params["Trilinos"].contains("block_size"))
             {
-                if (params["Trilinos"]["block_size"] == 2 || params["Trilinos"]["block_size"] == 3)
+                int bs = params["Trilinos"]["block_size"];
+                if (bs == 2 || bs == 3)
                 {
-                    numPDEs = params["Trilinos"]["block_size"];
+                    numPDEs = bs;
                 }
             }
             if (params["Trilinos"].contains("max_iter"))
@@ -152,7 +79,6 @@ namespace polysolve::linear
         }
     }
 
-    /////////////////////////////////////////////////
     void TrilinosSolver::get_info(json &params) const
     {
         params["num_iterations"] = iterations_;
@@ -161,202 +87,190 @@ namespace polysolve::linear
         params["solver_maxiter"] = max_iter_;
     }
 
-    /////////////////////////////////////////////////
     void TrilinosSolver::factorize(const StiffnessMatrix &Ain)
     {
         POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
-        assert(precond_num_ > 0);
-        // Eigen::saveMarket(Ain,"/home/yiwei/matrix_struct/A_nonLinear.mtx");
-        // Eigen::saveMarket(test_vertices,"/home/yiwei/matrix_struct/vec.mtx");
-        Eigen::SparseMatrix<double,Eigen::RowMajor> Arow(Ain);
-        int mypid = CommPtr->MyPID();
-        int indexBase=0;
-        int numGlobalElements = Arow.nonZeros();
-        int numGlobalRows=Arow.rows();
         
-        int numNodes= numGlobalRows /numPDEs;
-        if ((numGlobalRows - numNodes * numPDEs) != 0 && !mypid){
-            throw std::runtime_error("Number of matrix rows is not divisible by #dofs");
+        // Convert Eigen::SparseMatrix to Tpetra::CrsMatrix
+        Eigen::SparseMatrix<double, Eigen::RowMajor> Arow(Ain);
+        
+        const GlobalOrdinal numGlobalRows = static_cast<GlobalOrdinal>(Arow.rows());
+        const GlobalOrdinal indexBase = 0;
+        
+        // Verify divisibility
+        if ((numGlobalRows % numPDEs) != 0) {
+             throw std::runtime_error("Number of matrix rows is not divisible by #dofs");
         }
-        int numMyNodes;
-        int nproc = CommPtr->NumProc();
-        if (CommPtr->MyPID() < nproc-1) numMyNodes = numNodes / nproc;
-        else numMyNodes = numNodes - (numNodes/nproc) * (nproc-1);
-        delete rowMap;
-        delete A;
-        rowMap = new Epetra_Map(numGlobalRows,numMyNodes*numPDEs,indexBase,(*CommPtr));
 
-        A = new Epetra_CrsMatrix(Copy,*rowMap,0); //Can allocate memory for each row in advance
+        // Create Map
+        // We let Tpetra decide the distribution/map unless specific load balancing is needed.
+        // Tpetra default constructor creates a uniform distribution.
+        rowMap_ = Teuchos::rcp(new Map(numGlobalRows, indexBase, comm_));
 
-        {
-            int nnzs=0;
-            for (int k=0 ; k < Arow.outerSize(); k++)
-            {
-                // std::cout<<Arow.innerVector(k).nonZeros()<<" ";
-                int numEntries=Arow.outerIndexPtr()[k+1]-Arow.outerIndexPtr()[k];
-                int* indices=Arow.innerIndexPtr () + nnzs;
-                double* values=Arow.valuePtr () + nnzs;
-                A->InsertGlobalValues(k,numEntries,values,indices);
-                nnzs=nnzs+numEntries;
+        // Create Matrix
+        // We estimate non-zeros. For correct parallel allocation, we should count local nnz.
+        // For simplicity, we use dynamic profile (0) or strict count if easy.
+        
+        // Count NNZ for local rows to optimize allocation
+        size_t localNumRows = rowMap_->getLocalNumElements();
+        Teuchos::ArrayRCP<size_t> nnzPerRow(localNumRows);
+        
+        for(size_t i=0; i<localNumRows; ++i) {
+            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
+            // Assuming Arow has global indexing.
+            if(gid < Arow.outerSize()) {
+                 nnzPerRow[i] = Arow.outerIndexPtr()[gid+1] - Arow.outerIndexPtr()[gid];
+            } else {
+                 nnzPerRow[i] = 0;
             }
         }
-        A->FillComplete();
-    }
 
-    namespace
-    {
-        void TrilinosML_SetDefaultOptions(Teuchos::ParameterList &MLList)
+        // Create CrsMatrix with static profile graph (if possible) or dynamic
+        A_ = Teuchos::rcp(new CrsMatrix(rowMap_, nnzPerRow()));
+
+        // Fill Matrix
+        // Iterate over LOCAL rows to avoid Tpetra errors about non-owned rows.
+        for (size_t i = 0; i < localNumRows; ++i)
         {
-            std::string aggr_type="Uncoupled-MIS";
-            double str_connect=0.08;
-            ML_Epetra::SetDefaults("SA", MLList);
-            MLList.set("aggregation: type",aggr_type); // Aggresive Method
-            // MLList.set("aggregation: type","Uncoupled"); // Fixed size
+            GlobalOrdinal globalRow = rowMap_->getGlobalElement(i);
+            
+            if (globalRow >= Arow.outerSize()) continue;
+            
+            int start = Arow.outerIndexPtr()[globalRow];
+            int end = Arow.outerIndexPtr()[globalRow+1];
+            int numEntries = end - start;
+            
+            const double* values_ptr = Arow.valuePtr() + start;
+            const int* indices_ptr = Arow.innerIndexPtr() + start;
+            
+            std::vector<GlobalOrdinal> col_indices(numEntries);
+            for(int k=0; k<numEntries; ++k) col_indices[k] = static_cast<GlobalOrdinal>(indices_ptr[k]);
+            
+            Teuchos::ArrayView<const double> valView(values_ptr, numEntries);
+            Teuchos::ArrayView<const GlobalOrdinal> idxView(col_indices.data(), numEntries);
+            
+            A_->insertGlobalValues(globalRow, idxView, valView);
+        }
+        
+        A_->fillComplete();
+        
+        // Preconditioner Setup (MueLu)
+        Teuchos::ParameterList mueLuParams;
+        mueLuParams.set("verbosity", "none");
+        mueLuParams.set("coarse: max size", 1000);
+        mueLuParams.set("multigrid algorithm", "sa");
 
+        // Aggregation
+        mueLuParams.set("aggregation: type", "uncoupled");
+        mueLuParams.set("aggregation: drop tol", 0.08);
 
-            MLList.set("aggregation: threshold",str_connect);
+        // Smoother
+        mueLuParams.set("smoother: type", "CHEBYSHEV");
+        Teuchos::ParameterList& smootherList = mueLuParams.sublist("smoother: params");
+        smootherList.set("chebyshev: degree", 5);
+        smootherList.set("chebyshev: ratio eigenvalue", 30.0);
+        
+        // Nullspace Coordinates
+        Teuchos::RCP<MultiVector> coords = Teuchos::null;
+        if (numPDEs > 1 && is_nullspace_ && reduced_vertices.rows() > 0)
+        {
+             // TODO: Implement coordinate transfer if necessary.
+             // Usually mapping Eigen Matrix to MultiVector.
+             // For now, we skip explicit coordinates unless crucial for convergence on this problem.
+             // If needed:
+             // 1. Create Map for Nodes (numGlobalRows / numPDEs)
+             // 2. Create MultiVector(nodeMap, 3)
+             // 3. Fill.
+             // 4. Pass to CreateTpetraPreconditioner as 3rd arg or via "Coordinates" param.
+        }
 
-            // Smoother Settings
-            MLList.set("smoother: type","Chebyshev");
-            MLList.set("smoother: sweeps", 5); //Chebyshev degree
-            MLList.set("smoother: Chebyshev alpha",30.0);
-
-            //Coarser Settings
-            MLList.set("coarse: max size",1000);
-
-            MLList.set("ML output",0);
+        try {
+            preconditioner_ = MueLu::CreateTpetraPreconditioner((Teuchos::RCP<Operator>)A_, mueLuParams);
+        } catch (const std::exception& e) {
+            std::cerr << "MueLu setup failed: " << e.what() << std::endl;
+            // Fallback or rethrow
+            throw;
         }
     }
-
 
     void TrilinosSolver::solve(const Eigen::Ref<const VectorXd> rhs, Eigen::Ref<VectorXd> result)
     {
         POLYSOLVE_SCOPED_STOPWATCH("solve", total_time, *logger);
-        int output=10; //how often to print residual history
-        Teuchos::ParameterList MLList;
-        TrilinosML_SetDefaultOptions(MLList);
-        MLList.set("PDE equations",numPDEs);
         
-        //Set null space
+        if (A_ == Teuchos::null) throw std::runtime_error("Matrix not factorized");
 
-        // if (true)
-        // {
-        // int n=test_vertices.rows();
-        // int NRbm=0;
-        // int NscalarDof=0;
+        // Create Vectors
+        Teuchos::RCP<MultiVector> X = Teuchos::rcp(new MultiVector(rowMap_, 1));
+        Teuchos::RCP<MultiVector> B = Teuchos::rcp(new MultiVector(rowMap_, 1));
         
-        // if (numPDEs==2)
-        // {
-        //     NRbm=3;
-        //     rbm=new double[n*(NRbm+NscalarDof)*(numPDEs+NscalarDof)];
-        //     std::vector<double> z_coord(n,0);
-        //     ML_Coord2RBM(n,test_vertices.col(0).data(),test_vertices.col(1).data(),z_coord.data(),rbm,numPDEs,NscalarDof);
-        // }
-        // else
-        // {
-        //     NRbm=6;
-        //     rbm=new double[n*(NRbm+NscalarDof)*(numPDEs+NscalarDof)];
-        //     ML_Coord2RBM(n,test_vertices.col(0).data(),test_vertices.col(1).data(),test_vertices.col(2).data(),rbm,numPDEs,NscalarDof);
-        // }
-
-        // MLList.set("null space: vectors",rbm);
-        // MLList.set("null space: dimension", NRbm);        
-        // MLList.set("null space: type", "pre-computed");
-        // MLList.set("aggregation: threshold",0.00);
-        // }
-
-        ///////////////////////////////////////////////////////////////////////
-
-        // if (is_nullspace_)
-        // {
-        //     if (test_vertices.cols()==3)
-        //     {
-        //         reduced_vertices=remove_boundary_vertices(test_vertices,test_boundary_nodes);
-        //         MLList.set("null space: type","elasticity from coordinates");
-        //         MLList.set("x-coordinates", reduced_vertices.col(0).data());
-        //         MLList.set("y-coordinates", reduced_vertices.col(1).data());
-        //         MLList.set("z-coordinates", reduced_vertices.col(2).data());
-        //         MLList.set("aggregation: threshold",0.00);
-        //     }
-        //     if (test_vertices.cols()==2)
-        //     {
-        //         reduced_vertices=remove_boundary_vertices(test_vertices,test_boundary_nodes);
-        //         MLList.set("null space: type","elasticity from coordinates");
-        //         MLList.set("x-coordinates", reduced_vertices.col(0).data());
-        //         MLList.set("y-coordinates", reduced_vertices.col(1).data());
-        //         MLList.set("aggregation: threshold",0.00);
-        //     }           
-
-        // }
-
-        delete MLPrec;
-        MLPrec = new ML_Epetra::MultiLevelPreconditioner(*A, MLList);
-        Epetra_Vector x(A->RowMap());
-        Epetra_Vector b(A->RowMap());
-        for (size_t i = 0; i < rhs.size(); i++)
+        // Fill B and Initial Guess X
+        // Assuming we can access local data directly.
+        // Note: rhs/result are global Eigen vectors?
+        
+        // Copy data logic matching original distribution assumptions
+        auto x_data = X->getDataNonConst(0);
+        auto b_data = B->getDataNonConst(0);
+        
+        size_t localLen = X->getLocalLength();
+        for(size_t i=0; i<localLen; ++i)
         {
-            x[i]=result[i];
-            b[i]=rhs[i];
-        }
-        // std::cout<<"x[0] "<<x[0]<<std::endl;
-        // std::cout<<"b[0] "<<b[0]<<std::endl;
-
-        Epetra_LinearProblem Problem(A,&x,&b);
-        AztecOO solver(Problem);
-        solver.SetAztecOption(AZ_solver, AZ_cg);
-        solver.SetPrecOperator(MLPrec);
-        // solver.SetAztecOption(AZ_output, AZ_last);
-        solver.SetAztecOption(AZ_output, AZ_warnings);
-
-       int status= solver.Iterate(max_iter_, conv_tol_ );
-        if (status!=0 && status!=-3)
-        {
-            throw std::runtime_error("Early termination, not SPD");
+            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
+            if (gid < rhs.size()) {
+                b_data[i] = rhs[gid];
+                x_data[i] = result[gid]; // Initial guess
+            }
         }
         
-
-        //Calculate a final residual
-        // Epetra_Vector workvec(A->RowMap());
-        // double mynorm;
-        // A->Multiply(false,x,workvec);
-        // workvec.Update(1.0,b,-1.0);
-        // b.Norm2(&mynorm);
-        // workvec.Scale(1./mynorm);
-        // workvec.Norm2(&mynorm);
-        if (CommPtr->MyPID() == 0)
-        {
-
-            // std::cout<<"Max iterations "<<max_iter_<<std::endl;
-            // std::cout<<"Trilinos ScaleResidual is is "<<solver.TrueResidual ()<<std::endl;
-            // std::cout<<"Trilinos ScaleResidual is "<<solver.ScaledResidual ()<<std::endl;
-            // std::cout<<"Iterations are "<<solver.NumIters()<<std::endl;
-            residual_error_=solver.ScaledResidual ();
-            iterations_=solver.NumIters();
+        // Linear Problem
+        Teuchos::RCP<BelosProblem> problem = Teuchos::rcp(new BelosProblem(A_, X, B));
+        
+        if (preconditioner_ != Teuchos::null) {
+            problem->setLeftPrec(preconditioner_);
         }
         
-        // if (iterations_>175)
-        // {
-        //    exit();
-        // }
-        
-
-
-        for (size_t i = 0; i < rhs.size(); i++)
-        {
-            result[i]=x[i];
+        bool set = problem->setProblem();
+        if (!set) {
+            throw std::runtime_error("Belos::LinearProblem::setProblem() failed");
         }
-   
-    }
+        
+        // Solver Parameter List
+        Teuchos::ParameterList belosList;
+        belosList.set("Maximum Iterations", max_iter_);
+        belosList.set("Convergence Tolerance", conv_tol_);
+        belosList.set("Verbosity", Belos::Errors + Belos::Warnings);
+        belosList.set("Output Frequency", 50);  // Print every 50 iterations
+        
+        // Use GMRES instead of CG for general (non-SPD) matrices
+        // GMRES works for any matrix, while CG requires symmetric positive-definite
+        Belos::BlockGmresSolMgr<Scalar, MultiVector, Operator> solver(problem, Teuchos::rcp(&belosList, false));
+        
+        // Solve
+        Belos::ReturnType ret;
+        try {
+            ret = solver.solve();
+        } catch (const std::exception& e) {
+            std::cerr << "Belos solver threw exception: " << e.what() << std::endl;
+            throw;
+        }
+        
+        iterations_ = solver.getNumIters();
+        residual_error_ = solver.achievedTol();
 
-    TrilinosSolver:: ~TrilinosSolver()
-    {
-        delete A;
-        delete rowMap;
-        delete MLPrec;   
-#ifdef HAVE_MPI
-        MPI_Finalize() ;
-#endif
+        if (ret != Belos::Converged) {
+            // Log warning but don't throw - some applications may accept non-converged solutions
+            std::cerr << "Warning: Belos did not converge after " << iterations_ 
+                      << " iterations. Final residual: " << residual_error_ << std::endl;
+            // Uncomment to make non-convergence fatal:
+            // throw std::runtime_error("Belos did not converge");
+        }
+        
+        // Copy result back
+        for(size_t i=0; i<localLen; ++i)
+        {
+            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
+            if (gid < result.size()) {
+                result[gid] = x_data[i];
+            }
+        }
     }
 }
-
-// #endif

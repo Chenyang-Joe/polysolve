@@ -9,46 +9,55 @@
 #include <Eigen/Sparse>
 #include <vector>
 
-#ifdef HAVE_MPI
-#include "mpi.h"
-#include "Epetra_MpiComm.h"
-#else
-#include "Epetra_SerialComm.h"
-#endif
-#include "Teuchos_CommandLineProcessor.hpp"
-#include "Epetra_Map.h"
-#include "Epetra_Vector.h"
-#include "Epetra_CrsMatrix.h"
-#include "Epetra_LinearProblem.h"
-#include "EpetraExt_BlockMapIn.h"
-#include "EpetraExt_CrsMatrixIn.h"
-#include "EpetraExt_RowMatrixOut.h"
-#include "EpetraExt_MultiVectorOut.h"
-#include "EpetraExt_MultiVectorIn.h"
-#include "AztecOO.h"
+// Tpetra
+#include <Tpetra_Core.hpp>
+#include <Tpetra_Map.hpp>
+#include <Tpetra_CrsMatrix.hpp>
+#include <Tpetra_MultiVector.hpp>
 
-#include "ml_include.h"
-#include "ml_MultiLevelPreconditioner.h"
-#include "ml_epetra.h"
-#include <fstream>
+// Kokkos
+#include <Kokkos_Core.hpp>
+
+// Belos
+#include <BelosConfigDefs.hpp>
+#include <BelosLinearProblem.hpp>
+#include <BelosBlockCGSolMgr.hpp>
+#include <BelosBlockGmresSolMgr.hpp>
+#include <BelosTpetraAdapter.hpp>
+
+// MueLu
+#include <MueLu.hpp>
+#include <MueLu_TpetraOperator.hpp>
+#include <MueLu_CreateTpetraPreconditioner.hpp>
+
+#include <Teuchos_CommandLineProcessor.hpp>
 
 #include "../Utils.hpp"
-////////////////////////////////////////////////////////////////////////////////
-//
-// WARNING:
-// The matrix is assumed to be in row-major format, since AMGCL assumes that the
-// outer index is for row. If the matrix is symmetric, you are fine, because CSR
-// and CSC are the same. If the matrix is not symmetric and you pass in a
-// column-major matrix, the solver will actually solve A^T x = b.
-//
 
 namespace polysolve::linear
 {
 
     class TrilinosSolver : public Solver
     {
-
     public:
+        // Use default Tpetra types for now, or match PolySolve's index types if possible.
+        // Assuming double scalar.
+        using Scalar = double;
+        using LocalOrdinal = int;
+#ifdef POLYSOLVE_LARGE_INDEX
+        using GlobalOrdinal = long long;
+#else
+        using GlobalOrdinal = int;
+#endif
+        using Node = Tpetra::Map<>::node_type;
+
+        using Map = Tpetra::Map<LocalOrdinal, GlobalOrdinal, Node>;
+        using CrsMatrix = Tpetra::CrsMatrix<Scalar, LocalOrdinal, GlobalOrdinal, Node>;
+        using MultiVector = Tpetra::MultiVector<Scalar, LocalOrdinal, GlobalOrdinal, Node>;
+        using Operator = Tpetra::Operator<Scalar, LocalOrdinal, GlobalOrdinal, Node>;
+        using BelosProblem = Belos::LinearProblem<Scalar, MultiVector, Operator>;
+        using BelosSolverMan = Belos::SolverManager<Scalar, MultiVector, Operator>;
+
         TrilinosSolver();
         ~TrilinosSolver();
 
@@ -76,28 +85,25 @@ namespace polysolve::linear
         virtual void solve(const Ref<const VectorXd> b, Ref<VectorXd> x) override;
         
         // Name of the solver type (for debugging purposes)
-        virtual std::string name() const override { return "Trilinos AztecOO and ML"; }
+        virtual std::string name() const override { return "Trilinos Belos and MueLu"; }
 
     protected:
         int numPDEs = 1; // 1 = scalar (Laplace), 2 or 3 = vector (Elasticity)
         int max_iter_ = 1000;
         double conv_tol_ = 1e-8;
-        size_t iterations_;
-        double residual_error_;
+        size_t iterations_ = 0;
+        double residual_error_ = 0.0;
         bool is_nullspace_ = true;
         Eigen::MatrixXd reduced_vertices;
-        ML_Epetra::MultiLevelPreconditioner* MLPrec=NULL;
-        Epetra_Map *rowMap=NULL;
+        
+        Teuchos::RCP<Operator> preconditioner_;
+        Teuchos::RCP<const Map> rowMap_;
 
     private:
         int precond_num_;
-        Epetra_CrsMatrix *A=NULL;
+        Teuchos::RCP<CrsMatrix> A_;
         double total_time;
-#ifdef HAVE_MPI
-        Epetra_MpiComm *CommPtr;
-#else
-        Epetra_SerialComm *CommPtr;
-#endif
+        Teuchos::RCP<const Teuchos::Comm<int>> comm_;
     };
 
 } // namespace polysolve

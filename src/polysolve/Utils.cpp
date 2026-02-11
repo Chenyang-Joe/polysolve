@@ -59,7 +59,7 @@ namespace polysolve
 
         if (!m_name.empty())
         {
-            m_logger.trace(log_fmt_text, m_name, getElapsedTimeInSec());
+            m_logger.trace(fmt::runtime(log_fmt_text), m_name, getElapsedTimeInSec());
         }
     }
 

@@ -6,6 +6,8 @@ else()
     set(POLYSOLVE_TOPLEVEL_PROJECT ON)
 endif()
 
+# Find MPI C++ bindings explicitly
+
 # Check required CMake version
 set(REQUIRED_CMAKE_VERSION "3.18.0")
 if(POLYSOLVE_TOPLEVEL_PROJECT)
@@ -58,7 +60,10 @@ set(CMAKE_POLICY_DEFAULT_CMP0135 NEW) # Set the timestamps of all extracted cont
 
 project(PolySolve
         DESCRIPTION "Easy-to-use wrapper for linear solver"
-        LANGUAGES CXX)
+        LANGUAGES CXX C)
+
+# Find MPI C++ bindings explicitly
+find_package(MPI REQUIRED COMPONENTS CXX)
 
 if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" AND APPLE)
     set(POLYSOLVE_NOT_ON_APPLE_SILICON OFF)
@@ -158,7 +163,7 @@ add_library(polysolve)
 add_library(polysolve::polysolve ALIAS polysolve)
 add_subdirectory(src/polysolve/nonlinear)
 
-target_link_libraries(polysolve_linear PUBLIC polysolve_coverage_config)
+target_link_libraries(polysolve_linear PUBLIC polysolve_coverage_config MPI::MPI_CXX)
 target_link_libraries(polysolve PUBLIC polysolve_coverage_config)
 
 target_compile_features(polysolve_linear PUBLIC cxx_std_17)
@@ -293,12 +298,15 @@ endif()
 
 # Trilinos
 if (POLYSOLVE_WITH_TRILINOS)
-    set(CMAKE_PREFIX_PATH "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib")
-    set(CMAKE_C_COMPILER ${mpi_cc})
-    set(CMAKE_CXX_COMPILER ${mpi_cxx})
+    # set(CMAKE_PREFIX_PATH "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib")
+    # # set(CMAKE_C_COMPILER ${mpi_cc})
+    # set(CMAKE_CXX_COMPILER ${mpi_cxx})
+    # set(Trilinos_DIR "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib/cmake/Trilinos")
+    # find_package(Trilinos REQUIRED COMPONENTS ML Epetra)# Only for local build, fix it when publish 
+    set(CMAKE_PREFIX_PATH "/u/1/chenyang/LearnTrilinos/tril-install-prefix")
     # Specify Trilinos installation directory (set before find_package)
-    set(Trilinos_DIR "/u/1/chenyang/benchmark/libs/Trilinos-yiwei/lib/cmake/Trilinos")
-    find_package(Trilinos REQUIRED COMPONENTS ML Epetra)# Only for local build, fix it when publish 
+    set(Trilinos_DIR "/u/1/chenyang/LearnTrilinos/tril-install-prefix/lib/cmake/Trilinos")
+    find_package(Trilinos REQUIRED COMPONENTS Tpetra Belos MueLu)
     MESSAGE("\nFound Trilinos!  Here are the details: ")
     MESSAGE("   Trilinos_DIR = ${Trilinos_DIR}")
     MESSAGE("   Trilinos_VERSION = ${Trilinos_VERSION}")
