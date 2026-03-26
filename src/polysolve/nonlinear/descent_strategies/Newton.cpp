@@ -182,6 +182,7 @@ namespace polysolve::nonlinear
 		benchy::io::Problem<double> probleminfo;
 		probleminfo.A = hessian;
 		probleminfo.b = -grad;
+		probleminfo.is_projected = is_psd_projected() ? 1 : 0;
 		benchy::io::iter_global++;  // starts from 1
 		std::cout << "TIME STEP: " << benchy::io::ts_global << " ITER: " << benchy::io::iter_global << std::endl;
 		// probleminfo.nullspace = remove_boundary_vertices(test_vertices, test_boundary_nodes);

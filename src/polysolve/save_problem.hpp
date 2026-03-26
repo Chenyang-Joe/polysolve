@@ -5,14 +5,15 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <stdexcept>
+#include <limits>
+#include <algorithm>
 
 #include <Eigen/Core>
 #include <vector>
 
-#include <Eigen/Dense>
-// #include <tinyxml2.h>
-
-#include <filesystem>
+// Include polysolve types for StiffnessMatrix
+#include "polysolve/Types.hpp"
 
 using namespace Eigen;
 
@@ -26,16 +27,77 @@ extern int dim_global;
 
 typedef Triplet<int> Trip;
 
-template <typename T, int _Options, typename IND>
-void Serialize(const SparseMatrix<T, _Options, IND>& mat, const int dim, const int is_symmetric_positive_definite, const int is_sequence_of_problems, std::string filename) {
-    std::filesystem::path out_path(filename);
-    std::filesystem::create_directories(out_path.parent_path());
-    
-    std::cout << "write to "<<filename<<std::endl;
-    
-    // std::vector<Trip> res;
-    // int sz = mat.nonZeros();
-    SparseMatrix<T, _Options, IND> m=mat;
+// template <typename T, int whatever, typename IND>
+// void Serialize(const SparseMatrix<T, whatever, IND>& mat, const int dim, const int is_symmetric_positive_definite, const int is_sequence_of_problems, std::string filename) {
+//     std::vector<Trip> res;
+//     int sz = mat.nonZeros();
+//     SparseMatrix<T, whatever, IND> m=mat;
+//     m.makeCompressed();
+
+//     std::fstream writeFile;
+//     writeFile.open(filename, std::ios::binary | std::ios::out);
+
+//     if(writeFile.is_open())
+//     {
+//         writeFile.write((const char *)&(dim), sizeof(int));
+//         writeFile.write((const char *)&(is_symmetric_positive_definite), sizeof(int));
+//         writeFile.write((const char *)&(is_sequence_of_problems), sizeof(int));
+
+//         IND rows, cols, nnzs, outS, innS;
+//         rows = m.rows()     ;
+//         cols = m.cols()     ;
+//         nnzs = m.nonZeros() ;
+//         outS = m.outerSize();
+//         innS = m.innerSize();
+
+//         writeFile.write((const char *)&(rows), sizeof(IND));
+//         writeFile.write((const char *)&(cols), sizeof(IND));
+//         writeFile.write((const char *)&(nnzs), sizeof(IND));
+//         writeFile.write((const char *)&(innS), sizeof(IND));
+//         writeFile.write((const char *)&(outS), sizeof(IND));
+
+//         writeFile.write((const char *)(m.valuePtr()),       sizeof(T  ) * m.nonZeros());
+//         writeFile.write((const char *)(m.outerIndexPtr()),  sizeof(IND) * m.outerSize());
+//         writeFile.write((const char *)(m.innerIndexPtr()),  sizeof(IND) * m.nonZeros());
+
+//         writeFile.close();
+//     }
+// }
+
+// template <typename T, int whatever, typename IND>
+// void Deserialize(SparseMatrix<T, whatever, IND>& m, int& dim, int& is_symmetric_positive_definite, int& is_sequence_of_problems, std::string filename) {
+//     std::fstream readFile;
+//     readFile.open(filename, std::ios::binary | std::ios::in);
+//     if(readFile.is_open())
+//     {
+//         readFile.read((char*)&dim, sizeof(int));
+//         readFile.read((char*)&is_symmetric_positive_definite, sizeof(int));
+//         readFile.read((char*)&is_sequence_of_problems, sizeof(int));
+
+//         IND rows, cols, nnz, inSz, outSz;
+//         readFile.read((char*)&rows , sizeof(IND));
+//         readFile.read((char*)&cols , sizeof(IND));
+//         readFile.read((char*)&nnz  , sizeof(IND));
+//         readFile.read((char*)&inSz , sizeof(IND));
+//         readFile.read((char*)&outSz, sizeof(IND));
+
+//         m.resize(rows, cols);
+//         m.makeCompressed();
+//         m.resizeNonZeros(nnz);
+
+//         readFile.read((char*)(m.valuePtr())     , sizeof(T  ) * nnz  );
+//         readFile.read((char*)(m.outerIndexPtr()), sizeof(IND) * outSz);
+//         readFile.read((char*)(m.innerIndexPtr()), sizeof(IND) * nnz );
+
+//         m.finalize();
+//         readFile.close();
+
+//     } // file is open
+// }
+
+// StiffnessMatrix versions - automatically handles large index based on POLYSOLVE_LARGE_INDEX
+inline void SerializeStiffnessMatrix(const polysolve::StiffnessMatrix& mat, const int dim, const int is_symmetric_positive_definite, const int is_sequence_of_problems, std::string filename) {
+    polysolve::StiffnessMatrix m = mat;
     m.makeCompressed();
 
     std::fstream writeFile;
@@ -47,29 +109,37 @@ void Serialize(const SparseMatrix<T, _Options, IND>& mat, const int dim, const i
         writeFile.write((const char *)&(is_symmetric_positive_definite), sizeof(int));
         writeFile.write((const char *)&(is_sequence_of_problems), sizeof(int));
 
-        IND rows, cols, nnzs, outS, innS;
-        rows = m.rows()     ;
-        cols = m.cols()     ;
-        nnzs = m.nonZeros() ;
-        outS = m.outerSize();
-        innS = m.innerSize();
+#ifdef POLYSOLVE_LARGE_INDEX
+        // Add format marker for ptrdiff_t format
+        int32_t format_marker = -1;
+        writeFile.write((const char *)&format_marker, sizeof(int32_t));
+        
+        typedef std::ptrdiff_t IndexType;
+#else
+        typedef int IndexType;
+#endif
 
-        writeFile.write((const char *)&(rows), sizeof(IND));
-        writeFile.write((const char *)&(cols), sizeof(IND));
-        writeFile.write((const char *)&(nnzs), sizeof(IND));
-        writeFile.write((const char *)&(innS), sizeof(IND));
-        writeFile.write((const char *)&(outS), sizeof(IND));
+        IndexType rows = static_cast<IndexType>(m.rows());
+        IndexType cols = static_cast<IndexType>(m.cols());
+        IndexType nnzs = static_cast<IndexType>(m.nonZeros());
+        IndexType outS = static_cast<IndexType>(m.outerSize());
+        IndexType innS = static_cast<IndexType>(m.innerSize());
 
-        writeFile.write((const char *)(m.valuePtr()),       sizeof(T  ) * m.nonZeros());
-        writeFile.write((const char *)(m.outerIndexPtr()),  sizeof(IND) * m.outerSize());
-        writeFile.write((const char *)(m.innerIndexPtr()),  sizeof(IND) * m.nonZeros());
+        writeFile.write((const char *)&(rows), sizeof(IndexType));
+        writeFile.write((const char *)&(cols), sizeof(IndexType));
+        writeFile.write((const char *)&(nnzs), sizeof(IndexType));
+        writeFile.write((const char *)&(innS), sizeof(IndexType));
+        writeFile.write((const char *)&(outS), sizeof(IndexType));
+
+        writeFile.write((const char *)(m.valuePtr()),       sizeof(double) * m.nonZeros());
+        writeFile.write((const char *)(m.outerIndexPtr()),  sizeof(IndexType) * m.outerSize());
+        writeFile.write((const char *)(m.innerIndexPtr()),  sizeof(IndexType) * m.nonZeros());
 
         writeFile.close();
     }
 }
 
-template <typename T, int _Options, typename IND>
-void Deserialize(SparseMatrix<T, _Options, IND>& m, int& dim, int& is_symmetric_positive_definite, int& is_sequence_of_problems, std::string filename) {
+inline void DeserializeStiffnessMatrix(polysolve::StiffnessMatrix& m, int& dim, int& is_symmetric_positive_definite, int& is_sequence_of_problems, std::string filename) {
     std::fstream readFile;
     readFile.open(filename, std::ios::binary | std::ios::in);
     if(readFile.is_open())
@@ -78,34 +148,103 @@ void Deserialize(SparseMatrix<T, _Options, IND>& m, int& dim, int& is_symmetric_
         readFile.read((char*)&is_symmetric_positive_definite, sizeof(int));
         readFile.read((char*)&is_sequence_of_problems, sizeof(int));
 
-        IND rows, cols, nnz, inSz, outSz;
-        readFile.read((char*)&rows , sizeof(IND));
-        readFile.read((char*)&cols , sizeof(IND));
-        readFile.read((char*)&nnz  , sizeof(IND));
-        readFile.read((char*)&inSz , sizeof(IND));
-        readFile.read((char*)&outSz, sizeof(IND));
+#ifdef POLYSOLVE_LARGE_INDEX
+        // Check if this is a new format file with ptrdiff_t indices
+        int32_t format_check;
+        readFile.read((char*)&format_check, sizeof(int32_t));
+        
+        if (format_check == -1) {
+            // This is a ptrdiff_t format file (new format)
+            typedef std::ptrdiff_t IndexType;
+            IndexType rows, cols, nnz, inSz, outSz;
+            readFile.read((char*)&rows , sizeof(IndexType));
+            readFile.read((char*)&cols , sizeof(IndexType));
+            readFile.read((char*)&nnz  , sizeof(IndexType));
+            readFile.read((char*)&inSz , sizeof(IndexType));
+            readFile.read((char*)&outSz, sizeof(IndexType));
+
+            m.resize(rows, cols);
+            m.makeCompressed();
+            m.resizeNonZeros(nnz);
+
+            readFile.read((char*)(m.valuePtr()),      sizeof(double) * nnz);
+            readFile.read((char*)(m.outerIndexPtr()), sizeof(IndexType) * outSz);
+            readFile.read((char*)(m.innerIndexPtr()), sizeof(IndexType) * nnz);
+
+            m.finalize();
+        } else {
+            // This is an int32_t format file (legacy format)
+            int32_t rows32 = format_check;
+            int32_t cols32, nnz32, inSz32, outSz32;
+            readFile.read((char*)&cols32 , sizeof(int32_t));
+            readFile.read((char*)&nnz32  , sizeof(int32_t));
+            readFile.read((char*)&inSz32 , sizeof(int32_t));
+            readFile.read((char*)&outSz32, sizeof(int32_t));
+
+            // Convert to ptrdiff_t
+            std::ptrdiff_t rows = static_cast<std::ptrdiff_t>(rows32);
+            std::ptrdiff_t cols = static_cast<std::ptrdiff_t>(cols32);
+            std::ptrdiff_t nnz = static_cast<std::ptrdiff_t>(nnz32);
+            std::ptrdiff_t inSz = static_cast<std::ptrdiff_t>(inSz32);
+            std::ptrdiff_t outSz = static_cast<std::ptrdiff_t>(outSz32);
+
+            m.resize(rows, cols);
+            m.makeCompressed();
+            m.resizeNonZeros(nnz);
+
+            readFile.read((char*)(m.valuePtr()), sizeof(double) * nnz);
+
+            // Read index arrays as int32_t and convert
+            std::vector<int32_t> outerIndex32(outSz);
+            std::vector<int32_t> innerIndex32(nnz);
+            
+            readFile.read((char*)outerIndex32.data(), sizeof(int32_t) * outSz);
+            readFile.read((char*)innerIndex32.data(), sizeof(int32_t) * nnz);
+
+            // Convert and copy to ptrdiff_t arrays
+            std::ptrdiff_t* outerPtr = m.outerIndexPtr();
+            std::ptrdiff_t* innerPtr = m.innerIndexPtr();
+            
+            for (std::ptrdiff_t i = 0; i < outSz; ++i) {
+                outerPtr[i] = static_cast<std::ptrdiff_t>(outerIndex32[i]);
+            }
+            
+            for (std::ptrdiff_t i = 0; i < nnz; ++i) {
+                innerPtr[i] = static_cast<std::ptrdiff_t>(innerIndex32[i]);
+            }
+
+            m.finalize();
+        }
+#else
+        // For regular build, read as int directly
+        typedef int IndexType;
+        IndexType rows, cols, nnz, inSz, outSz;
+        
+        // In non-POLYSOLVE_LARGE_INDEX mode, no format marker is written
+        // Read dimensions directly
+        readFile.read((char*)&rows , sizeof(IndexType));
+        readFile.read((char*)&cols , sizeof(IndexType));
+        readFile.read((char*)&nnz  , sizeof(IndexType));
+        readFile.read((char*)&inSz , sizeof(IndexType));
+        readFile.read((char*)&outSz, sizeof(IndexType));
 
         m.resize(rows, cols);
         m.makeCompressed();
         m.resizeNonZeros(nnz);
 
-        readFile.read((char*)(m.valuePtr())     , sizeof(T  ) * nnz  );
-        readFile.read((char*)(m.outerIndexPtr()), sizeof(IND) * outSz);
-        readFile.read((char*)(m.innerIndexPtr()), sizeof(IND) * nnz );
+        readFile.read((char*)(m.valuePtr())     , sizeof(double) * nnz  );
+        readFile.read((char*)(m.outerIndexPtr()), sizeof(IndexType) * outSz);
+        readFile.read((char*)(m.innerIndexPtr()), sizeof(IndexType) * nnz );
 
         m.finalize();
+#endif
+        
         readFile.close();
-
     } // file is open
 }
 
-
 template<class Matrix>
 void WriteMat(const Matrix& matrix, std::string filename){
-    std::filesystem::path out_path(filename);
-    std::filesystem::create_directories(out_path.parent_path());
-
-    std::cout << "write to "<<filename<<std::endl;
     std::ofstream out(filename, std::ios::out | std::ios::binary | std::ios::trunc);
     typename Matrix::Index rows=matrix.rows(), cols=matrix.cols();
     out.write((char*) (&rows), sizeof(typename Matrix::Index));
@@ -133,13 +272,14 @@ template <typename Scalar>
 struct Problem
 {
     /// Left-hand side sparse matrix.
-    Eigen::SparseMatrix<Scalar> A;
+    // Eigen::SparseMatrix<Scalar> A;
+    polysolve::StiffnessMatrix A;
 
     /// Right-hand side dense matrix. To save multiple rhs, use separate columns.
     Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> b;
 
-    /// Nullspace
-    Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic> nullspace;
+    /// Whether the Hessian was assembled with PSD projection (ProjectedNewton=1, Newton=0).
+    int is_projected = 0;
 };
 
 ///
@@ -181,42 +321,17 @@ bool save_problem(const Problem<Scalar>& problem)
     // write binary
     std::string filename1=mat_save_global+"/"+std::to_string(ts_global)+"_"+std::to_string(iter_global)+"_A.bin";
     std::string filename2=mat_save_global+"/"+std::to_string(ts_global)+"_"+std::to_string(iter_global)+"_b.bin";
-    std::string filename3=mat_save_global+"/"+std::to_string(ts_global)+"_"+std::to_string(iter_global)+"_nullspace.bin";
+    std::string filename3=mat_save_global+"/"+std::to_string(ts_global)+"_"+std::to_string(iter_global)+"_meta.bin";
 
     // write A
-    Serialize(problem.A, dim_global, 1, 1, filename1);
+    // Serialize(problem.A, dim_global, 1, 1, filename1);
+    SerializeStiffnessMatrix(problem.A, dim_global, 1, 1, filename1);
 
-    // cout dimenssion of A
-    std::cout << "Matrix A saved to " << filename1 << std::endl;
-    std::cout << "Serialized matrix A with dimensions: " << problem.A.rows() << " x " << problem.A.cols() << " and nnz: " << problem.A.nonZeros() << std::endl;
-
-
-
-
-// ************************************************************************************************************
-    // reload the matrix to check the difference
-    // Eigen::SparseMatrix<Scalar> A_;
-    // int dim_local = 0;
-    // int is_symmetric_positive_definite = 0;
-    // int is_sequence_of_problems = 0;
-    // Deserialize(A_, dim_local, is_symmetric_positive_definite, is_sequence_of_problems, filename1);
-    // // traverse the entries and print out the difference entry
-    // bool difference_found = false;
-    // for (int k=0; k<problem.A.outerSize(); ++k)
-    //     for (typename Eigen::SparseMatrix<Scalar>::InnerIterator it(problem.A,k); it; ++it)
-    //     {
-    //         Scalar val1 = it.value();
-    //         Scalar val2 = A_.coeff(it.row(), it.col());
-    //         if (std::abs(val1 - val2) > 1e-10)
-    //         {
-    //             std::cout << "Difference at (" << it.row() << ", " << it.col() << "): " << val1 << " vs " << val2 << std::endl;
-    //             difference_found = true;
-    //         }
-    //     }
-    // if (!difference_found)
-    //     std::cout << "No differences found between original and deserialized matrix A." << std::endl;
-
-// ************************************************************************************************************
+    // write meta (is_projected flag)
+    {
+        std::ofstream metaFile(filename3, std::ios::binary);
+        metaFile.write((const char *)&problem.is_projected, sizeof(int));
+    }
 
     // printf("SERIALIZING A\n");
     // std::cout << "DIM GLOBAL: " << dim_global << std::endl;
@@ -246,71 +361,10 @@ bool save_problem(const Problem<Scalar>& problem)
     // printf("DESERIALIZING b\n");
     // std::cout << b_ << "\n" << std::endl;
 
-    // write nullspace
-    // WriteMat(problem.nullspace, filename3);
-
-    // printf("SERIALIZING nullspace\n");
-    // std::cout << problem.nullspace << "\n" << std::endl;
-
-    // // load b
-    // Eigen::MatrixXd nullspace_;
-    // ReadMat(nullspace_, filename3);
-
-    // printf("DESERIALIZING nullspace\n");
-    // std::cout << nullspace_ << "\n" << std::endl;
-
     return true;
 }
 
-// template<class Matrix>
-// void save_vertices(Matrix &pointsMatrix, std::string fname)  // Matrix is Eigen::MatrixXd
-// {
-//     // std::string fname=mat_save_global+"/"+std::to_string(ts_global)+"_"+std::to_string(iter_global)+"_all_nodes.vtu";
-
-//     // Eigen::MatrixXd pointsMatrix(5, 3);
-//     // pointsMatrix << 0.0, 0.0, 0.0,
-//     //                 1.0, 0.0, 0.0,
-//     //                 0.0, 1.0, 0.0,
-//     //                 0.0, 0.0, 1.0,
-//     //                 1.0, 1.0, 1.0;
-
-//     tinyxml2::XMLDocument doc;
-
-//     tinyxml2::XMLElement* vtkFile = doc.NewElement("VTKFile");
-//     vtkFile->SetAttribute("type", "UnstructuredGrid");
-//     vtkFile->SetAttribute("version", "0.1");
-//     vtkFile->SetAttribute("byte_order", "LittleEndian");
-//     doc.InsertFirstChild(vtkFile);
-
-//     tinyxml2::XMLElement* unstructuredGrid = doc.NewElement("UnstructuredGrid");
-//     vtkFile->InsertEndChild(unstructuredGrid);
-
-//     tinyxml2::XMLElement* piece = doc.NewElement("Piece");
-//     piece->SetAttribute("NumberOfPoints", static_cast<int>(pointsMatrix.rows()));
-//     piece->SetAttribute("NumberOfCells", 0);  // no cell
-//     unstructuredGrid->InsertEndChild(piece);
-
-//     tinyxml2::XMLElement* points = doc.NewElement("Points");
-//     piece->InsertEndChild(points);
-
-//     tinyxml2::XMLElement* pointDataArray = doc.NewElement("DataArray");
-//     pointDataArray->SetAttribute("type", "Float32");
-//     pointDataArray->SetAttribute("NumberOfComponents", 3); // 3D coordinates
-//     pointDataArray->SetAttribute("format", "ascii");
-
-//     std::string pointData;
-//     for (int i = 0; i < pointsMatrix.rows(); ++i) {
-//         pointData += std::to_string(pointsMatrix(i, 0)) + " " +
-//                      std::to_string(pointsMatrix(i, 1)) + " " +
-//                      std::to_string(pointsMatrix(i, 2)) + "\n";
-//     }
-//     pointDataArray->SetText(pointData.c_str());
-//     points->InsertEndChild(pointDataArray);
-
-//     doc.SaveFile(fname.c_str());
-
-//     std::cout << "VTU file with points from Eigen::MatrixXd written to eigen_points.vtu" << std::endl;
-// }
 } // namespace io
 } // namespace benchy
+
 

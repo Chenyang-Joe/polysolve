@@ -35,6 +35,7 @@ namespace polysolve::nonlinear
                spdlog::logger &logger);
 
         std::string name() const override { return internal_name() + "Newton"; }
+        virtual bool is_psd_projected() const { return false; }
 
     private:
         double solve_sparse_linear_system(Problem &objFunc,
@@ -87,6 +88,7 @@ namespace polysolve::nonlinear
                         spdlog::logger &logger);
 
         std::string name() const override { return internal_name() + "ProjectedNewton"; }
+        bool is_psd_projected() const override { return true; }
 
     protected:
         void compute_hessian(Problem &objFunc,
@@ -116,6 +118,7 @@ namespace polysolve::nonlinear
 
         void reset(const int ndof) override;
         bool handle_error() override;
+        bool is_psd_projected() const override { return project_to_psd; }
 
     private:
         const bool project_to_psd;

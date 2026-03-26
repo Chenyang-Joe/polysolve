@@ -95,7 +95,7 @@ option(POLYSOLVE_SANITIZE_THREAD    "Sanitize Thread"                           
 option(POLYSOLVE_SANITIZE_UNDEFINED "Sanitize Undefined"                                OFF)
 
 # Misc.
-option(POLYSOLVE_LARGE_INDEX        "Build for large indices"                           OFF)
+option(POLYSOLVE_LARGE_INDEX        "Build for large indices"                           ON)
 option(POLYSOLVE_WITH_TESTS         "Build unit-tests"        ${POLYSOLVE_TOPLEVEL_PROJECT})
 
 include(CMakeDependentOption)
