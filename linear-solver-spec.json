@@ -161,9 +161,14 @@
         "type": "object",
         "optional": [
             "solver",
-            "precond"
+            "precond",
+            "block_size",
+            "max_iter",
+            "tolerance",
+            "is_nullspace",
+            "enable_repartition"
         ],
-        "doc": "Settings for the Trilinos solver. (not implemented yet)"
+        "doc": "Settings for the Trilinos solver (Belos PseudoBlockCG + MueLu)."
     },
     {
         "pointer": "/Trilinos/solver",
@@ -173,9 +178,39 @@
     },
     {
         "pointer": "/Trilinos/precond",
-        "default": "ML",
+        "default": "MueLu",
         "type": "string",
-        "doc": "Trilinos preconditioner type. (not implemented yet)"
+        "doc": "Trilinos preconditioner type (MueLu AMG)."
+    },
+    {
+        "pointer": "/Trilinos/block_size",
+        "default": 3,
+        "type": "int",
+        "doc": "Number of DOFs per node (1=scalar, 2=2D elasticity, 3=3D elasticity)."
+    },
+    {
+        "pointer": "/Trilinos/max_iter",
+        "default": 1000,
+        "type": "int",
+        "doc": "Maximum number of iterations."
+    },
+    {
+        "pointer": "/Trilinos/tolerance",
+        "default": 1e-10,
+        "type": "float",
+        "doc": "Convergence tolerance."
+    },
+    {
+        "pointer": "/Trilinos/is_nullspace",
+        "default": true,
+        "type": "bool",
+        "doc": "Enable nullspace handling for rigid body modes."
+    },
+    {
+        "pointer": "/Trilinos/enable_repartition",
+        "default": false,
+        "type": "bool",
+        "doc": "Enable graph-based repartitioning for load balancing (requires coordinates - currently not supported)."
     },
     {
         "pointer": "/Eigen::LeastSquaresConjugateGradient/max_iter",

@@ -14,6 +14,8 @@
 #include <Tpetra_Map.hpp>
 #include <Tpetra_CrsMatrix.hpp>
 #include <Tpetra_MultiVector.hpp>
+#include <Tpetra_Export.hpp>
+#include <Tpetra_Import.hpp>
 
 // Kokkos
 #include <Kokkos_Core.hpp>
@@ -22,6 +24,7 @@
 #include <BelosConfigDefs.hpp>
 #include <BelosLinearProblem.hpp>
 #include <BelosBlockCGSolMgr.hpp>
+#include <BelosPseudoBlockCGSolMgr.hpp>
 #include <BelosBlockGmresSolMgr.hpp>
 #include <BelosTpetraAdapter.hpp>
 
@@ -30,7 +33,10 @@
 #include <MueLu_TpetraOperator.hpp>
 #include <MueLu_CreateTpetraPreconditioner.hpp>
 
+// Teuchos
 #include <Teuchos_CommandLineProcessor.hpp>
+#include <Teuchos_DefaultMpiComm.hpp>  // For MpiComm
+#include <Teuchos_DefaultSerialComm.hpp>  // For SerialComm
 
 #include "../Utils.hpp"
 
@@ -85,15 +91,16 @@ namespace polysolve::linear
         virtual void solve(const Ref<const VectorXd> b, Ref<VectorXd> x) override;
         
         // Name of the solver type (for debugging purposes)
-        virtual std::string name() const override { return "Trilinos Belos and MueLu"; }
+        virtual std::string name() const override { return "Trilinos GMRES + SA-AMG"; }
 
     protected:
         int numPDEs = 1; // 1 = scalar (Laplace), 2 or 3 = vector (Elasticity)
         int max_iter_ = 1000;
-        double conv_tol_ = 1e-8;
+        double conv_tol_ = 1e-10;
         size_t iterations_ = 0;
         double residual_error_ = 0.0;
         bool is_nullspace_ = true;
+        bool enable_repartition_ = false;  // Graph-based repartitioning (default: off, matching Hypre)
         Eigen::MatrixXd reduced_vertices;
         
         Teuchos::RCP<Operator> preconditioner_;
@@ -104,6 +111,8 @@ namespace polysolve::linear
         Teuchos::RCP<CrsMatrix> A_;
         double total_time;
         Teuchos::RCP<const Teuchos::Comm<int>> comm_;
+        bool mpi_initialized_ = false;
+        bool tpetra_initialized_ = false;
     };
 
 } // namespace polysolve

@@ -23,14 +23,21 @@
 
 #ifdef HAVE_MPI
 #include <mpi.h>
+#include <Teuchos_DefaultMpiComm.hpp>
+#else
+#include <Teuchos_DefaultSerialComm.hpp>
 #endif
+
+#include <Teuchos_CommHelpers.hpp>
+#include <Tpetra_Export.hpp>
+#include <Tpetra_Import.hpp>
 
 namespace polysolve::linear
 {
     TrilinosSolver::TrilinosSolver()
     {
-        // Initialize MPI if necessary
 #ifdef HAVE_MPI
+        // Use polysolve's MPI environment
         int done_already;
         MPI_Initialized(&done_already);
         if (!done_already)
@@ -40,16 +47,39 @@ namespace polysolve::linear
             char *argv[] = {name};
             char **argvv = &argv[0];
             MPI_Init(&argc, &argvv);
+            mpi_initialized_ = true;
         }
+        comm_ = Teuchos::rcp(new Teuchos::MpiComm<int>(MPI_COMM_WORLD));
+#else
+        // No MPI: single-process serial mode
+        comm_ = Teuchos::rcp(new Teuchos::SerialComm<int>());
 #endif
-        // Get Default Communicator (wraps MPI_COMM_WORLD or Serial)
-        comm_ = Tpetra::getDefaultComm();
+        
+        if (!Tpetra::isInitialized()) {
+            int argc = 0;
+            char **argv = nullptr;
+            Tpetra::initialize(&argc, &argv);
+            tpetra_initialized_ = true;
+        }
     }
     
     TrilinosSolver::~TrilinosSolver()
     {
-        // Let Kokkos/Trilinos handle cleanup automatically
-        // Note: We do not call MPI_Finalize() to avoid interfering with outside MPI context.
+        // Explicitly release Tpetra objects before finalizing Kokkos
+        A_ = Teuchos::null;
+        rowMap_ = Teuchos::null;
+        preconditioner_ = Teuchos::null;
+        comm_ = Teuchos::null;
+
+        if (tpetra_initialized_) {
+            Tpetra::finalize();
+        }
+        
+#ifdef HAVE_MPI
+        if (mpi_initialized_) {
+            MPI_Finalize();
+        }
+#endif
     }
 
     void TrilinosSolver::set_parameters(const json &params)
@@ -64,6 +94,11 @@ namespace polysolve::linear
                     numPDEs = bs;
                 }
             }
+            // if (comm_->getRank() == 0) {
+            //     std::cerr << "[TrilinosSolver] numPDEs=" << numPDEs
+            //               << " max_iter=" << max_iter_ << " conv_tol=" << conv_tol_
+            //               << " is_nullspace=" << is_nullspace_ << std::endl;
+            // }
             if (params["Trilinos"].contains("max_iter"))
             {
                 max_iter_ = params["Trilinos"]["max_iter"];
@@ -91,105 +126,105 @@ namespace polysolve::linear
     {
         POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
         
-        // Convert Eigen::SparseMatrix to Tpetra::CrsMatrix
-        Eigen::SparseMatrix<double, Eigen::RowMajor> Arow(Ain);
-        
-        const GlobalOrdinal numGlobalRows = static_cast<GlobalOrdinal>(Arow.rows());
+        // 1. Setup distributed row map (DOF-aligned for MueLu)
+        GlobalOrdinal numGlobalRows = Ain.rows();
         const GlobalOrdinal indexBase = 0;
-        
-        // Verify divisibility
-        if ((numGlobalRows % numPDEs) != 0) {
-             throw std::runtime_error("Number of matrix rows is not divisible by #dofs");
+
+        if (numPDEs > 1 && numGlobalRows % numPDEs == 0) {
+            // Create a DOF-aligned map: partition by nodes so each rank's
+            // local row count is a multiple of numPDEs. This prevents MueLu's
+            // aggregation from splitting a node's DOFs across ranks.
+            GlobalOrdinal numNodes = numGlobalRows / numPDEs;
+            Teuchos::RCP<const Map> nodeMap = Teuchos::rcp(new Map(numNodes, indexBase, comm_));
+            size_t numLocalNodes = nodeMap->getLocalNumElements();
+            size_t numLocalDofs = numLocalNodes * numPDEs;
+            std::vector<GlobalOrdinal> myDofs(numLocalDofs);
+            for (size_t n = 0; n < numLocalNodes; ++n) {
+                GlobalOrdinal gNode = nodeMap->getGlobalElement(n);
+                for (int d = 0; d < numPDEs; ++d) {
+                    myDofs[n * numPDEs + d] = gNode * numPDEs + d;
+                }
+            }
+            rowMap_ = Teuchos::rcp(new Map(numGlobalRows,
+                Teuchos::ArrayView<const GlobalOrdinal>(myDofs.data(), numLocalDofs),
+                indexBase, comm_));
+        } else if (numPDEs > 1) {
+            throw std::runtime_error(
+                "TrilinosSolver: numGlobalRows=" + std::to_string(numGlobalRows)
+                + " is not divisible by numPDEs=" + std::to_string(numPDEs)
+                + ". Check block_size setting.");
+        } else {
+            // Scalar problem (numPDEs == 1): use default map
+            rowMap_ = Teuchos::rcp(new Map(numGlobalRows, indexBase, comm_));
         }
 
-        // Create Map
-        // We let Tpetra decide the distribution/map unless specific load balancing is needed.
-        // Tpetra default constructor creates a uniform distribution.
-        rowMap_ = Teuchos::rcp(new Map(numGlobalRows, indexBase, comm_));
+        // 2. Convert Eigen matrix to RowMajor for efficient row access
+        //    Every rank has the full Ain (read from file), so each rank
+        //    fills only its own local rows — no Export needed.
+        using EigenStorageIndex = typename StiffnessMatrix::StorageIndex;
+        Eigen::SparseMatrix<double, Eigen::RowMajor, EigenStorageIndex> Arow(Ain);
 
-        // Create Matrix
-        // We estimate non-zeros. For correct parallel allocation, we should count local nnz.
-        // For simplicity, we use dynamic profile (0) or strict count if easy.
-        
-        // Count NNZ for local rows to optimize allocation
-        size_t localNumRows = rowMap_->getLocalNumElements();
-        Teuchos::ArrayRCP<size_t> nnzPerRow(localNumRows);
-        
-        for(size_t i=0; i<localNumRows; ++i) {
-            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
-            // Assuming Arow has global indexing.
-            if(gid < Arow.outerSize()) {
-                 nnzPerRow[i] = Arow.outerIndexPtr()[gid+1] - Arow.outerIndexPtr()[gid];
+        // 3. Each rank fills its local rows directly
+        size_t numLocalRows = rowMap_->getLocalNumElements();
+        Teuchos::ArrayRCP<size_t> nnzPerRow(numLocalRows);
+        for (size_t lr = 0; lr < numLocalRows; ++lr) {
+            GlobalOrdinal gr = rowMap_->getGlobalElement(lr);
+            if (gr < Arow.outerSize()) {
+                nnzPerRow[lr] = Arow.outerIndexPtr()[gr + 1] - Arow.outerIndexPtr()[gr];
             } else {
-                 nnzPerRow[i] = 0;
+                nnzPerRow[lr] = 0;
             }
         }
 
-        // Create CrsMatrix with static profile graph (if possible) or dynamic
         A_ = Teuchos::rcp(new CrsMatrix(rowMap_, nnzPerRow()));
 
-        // Fill Matrix
-        // Iterate over LOCAL rows to avoid Tpetra errors about non-owned rows.
-        for (size_t i = 0; i < localNumRows; ++i)
-        {
-            GlobalOrdinal globalRow = rowMap_->getGlobalElement(i);
-            
-            if (globalRow >= Arow.outerSize()) continue;
-            
-            int start = Arow.outerIndexPtr()[globalRow];
-            int end = Arow.outerIndexPtr()[globalRow+1];
-            int numEntries = end - start;
-            
+        for (size_t lr = 0; lr < numLocalRows; ++lr) {
+            GlobalOrdinal gr = rowMap_->getGlobalElement(lr);
+            if (gr >= Arow.outerSize()) continue;
+
+            auto start = Arow.outerIndexPtr()[gr];
+            auto end = Arow.outerIndexPtr()[gr + 1];
+            int numEntries = static_cast<int>(end - start);
+            if (numEntries == 0) continue;
+
             const double* values_ptr = Arow.valuePtr() + start;
-            const int* indices_ptr = Arow.innerIndexPtr() + start;
-            
+            const auto* indices_ptr = Arow.innerIndexPtr() + start;
+
             std::vector<GlobalOrdinal> col_indices(numEntries);
-            for(int k=0; k<numEntries; ++k) col_indices[k] = static_cast<GlobalOrdinal>(indices_ptr[k]);
-            
+            for (int k = 0; k < numEntries; ++k)
+                col_indices[k] = static_cast<GlobalOrdinal>(indices_ptr[k]);
+
             Teuchos::ArrayView<const double> valView(values_ptr, numEntries);
             Teuchos::ArrayView<const GlobalOrdinal> idxView(col_indices.data(), numEntries);
-            
-            A_->insertGlobalValues(globalRow, idxView, valView);
+
+            A_->insertGlobalValues(gr, idxView, valView);
         }
-        
+
         A_->fillComplete();
-        
+
         // Preconditioner Setup (MueLu)
         Teuchos::ParameterList mueLuParams;
         mueLuParams.set("verbosity", "none");
-        mueLuParams.set("coarse: max size", 1000);
-        mueLuParams.set("multigrid algorithm", "sa");
-
-        // Aggregation
-        mueLuParams.set("aggregation: type", "uncoupled");
-        mueLuParams.set("aggregation: drop tol", 0.08);
-
-        // Smoother
         mueLuParams.set("smoother: type", "CHEBYSHEV");
-        Teuchos::ParameterList& smootherList = mueLuParams.sublist("smoother: params");
-        smootherList.set("chebyshev: degree", 5);
-        smootherList.set("chebyshev: ratio eigenvalue", 30.0);
-        
-        // Nullspace Coordinates
-        Teuchos::RCP<MultiVector> coords = Teuchos::null;
-        if (numPDEs > 1 && is_nullspace_ && reduced_vertices.rows() > 0)
-        {
-             // TODO: Implement coordinate transfer if necessary.
-             // Usually mapping Eigen Matrix to MultiVector.
-             // For now, we skip explicit coordinates unless crucial for convergence on this problem.
-             // If needed:
-             // 1. Create Map for Nodes (numGlobalRows / numPDEs)
-             // 2. Create MultiVector(nodeMap, 3)
-             // 3. Fill.
-             // 4. Pass to CreateTpetraPreconditioner as 3rd arg or via "Coordinates" param.
+
+        // Set numPDEs if applicable (elasticity)
+        if (numPDEs > 1) {
+            mueLuParams.set("number of equations", numPDEs);
         }
+        // if (comm_->getRank() == 0) {
+        //     std::cerr << "[TrilinosSolver::factorize] numPDEs=" << numPDEs
+        //               << " numGlobalRows=" << numGlobalRows
+        //               << " localRows=" << rowMap_->getLocalNumElements()
+        //               << " aligned=" << (rowMap_->getLocalNumElements() % numPDEs == 0 ? "yes" : "no")
+        //               << std::endl;
+        // }
 
         try {
-            preconditioner_ = MueLu::CreateTpetraPreconditioner((Teuchos::RCP<Operator>)A_, mueLuParams);
+            auto Aop = Teuchos::rcp_static_cast<Operator>(A_);
+            preconditioner_ = MueLu::CreateTpetraPreconditioner(Aop, mueLuParams);
         } catch (const std::exception& e) {
             std::cerr << "MueLu setup failed: " << e.what() << std::endl;
-            // Fallback or rethrow
-            throw;
+            preconditioner_ = Teuchos::null;
         }
     }
 
@@ -199,78 +234,77 @@ namespace polysolve::linear
         
         if (A_ == Teuchos::null) throw std::runtime_error("Matrix not factorized");
 
-        // Create Vectors
-        Teuchos::RCP<MultiVector> X = Teuchos::rcp(new MultiVector(rowMap_, 1));
-        Teuchos::RCP<MultiVector> B = Teuchos::rcp(new MultiVector(rowMap_, 1));
+        GlobalOrdinal numGlobalRows = rowMap_->getGlobalNumElements();
+
+        // 1. Prepare Source Map (Rank 0) for B and X
+        size_t numLocalSource = (comm_->getRank() == 0) ? numGlobalRows : 0;
+        Teuchos::RCP<Map> sourceMap = Teuchos::rcp(new Map(numGlobalRows, numLocalSource, 0, comm_));
+
+        // 2. Create Source Vector B (on Rank 0)
+        Teuchos::RCP<MultiVector> B_source = Teuchos::rcp(new MultiVector(sourceMap, 1));
         
-        // Fill B and Initial Guess X
-        // Assuming we can access local data directly.
-        // Note: rhs/result are global Eigen vectors?
-        
-        // Copy data logic matching original distribution assumptions
-        auto x_data = X->getDataNonConst(0);
-        auto b_data = B->getDataNonConst(0);
-        
-        size_t localLen = X->getLocalLength();
-        for(size_t i=0; i<localLen; ++i)
-        {
-            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
-            if (gid < rhs.size()) {
-                b_data[i] = rhs[gid];
-                x_data[i] = result[gid]; // Initial guess
+        if (comm_->getRank() == 0) {
+            auto b_data = B_source->getDataNonConst(0);
+            for (size_t i = 0; i < (size_t)rhs.size(); ++i) {
+                b_data[i] = rhs(i);
             }
         }
-        
-        // Linear Problem
-        Teuchos::RCP<BelosProblem> problem = Teuchos::rcp(new BelosProblem(A_, X, B));
-        
+
+        // 3. Distribute B to Target Vector (on rowMap_)
+        Teuchos::RCP<MultiVector> B_target = Teuchos::rcp(new MultiVector(rowMap_, 1));
+        Tpetra::Export<LocalOrdinal, GlobalOrdinal, Node> exporter(sourceMap, rowMap_);
+        B_target->doExport(*B_source, exporter, Tpetra::INSERT);
+
+        // 4. Create Target X (initial guess 0)
+        Teuchos::RCP<MultiVector> X_target = Teuchos::rcp(new MultiVector(rowMap_, 1));
+        X_target->putScalar(0.0);
+
+        // 5. Setup Belos Solver
+        Teuchos::RCP<Belos::LinearProblem<Scalar, MultiVector, Operator>> problem =
+            Teuchos::rcp(new Belos::LinearProblem<Scalar, MultiVector, Operator>(A_, X_target, B_target));
+
         if (preconditioner_ != Teuchos::null) {
-            problem->setLeftPrec(preconditioner_);
+            problem->setRightPrec(preconditioner_);
         }
         
         bool set = problem->setProblem();
         if (!set) {
-            throw std::runtime_error("Belos::LinearProblem::setProblem() failed");
+             throw std::runtime_error("Belos::LinearProblem failed to set up");
         }
-        
-        // Solver Parameter List
+
+        // Use ParameterList for Belos
         Teuchos::ParameterList belosList;
         belosList.set("Maximum Iterations", max_iter_);
         belosList.set("Convergence Tolerance", conv_tol_);
         belosList.set("Verbosity", Belos::Errors + Belos::Warnings);
-        belosList.set("Output Frequency", 50);  // Print every 50 iterations
-        
-        // Use GMRES instead of CG for general (non-SPD) matrices
-        // GMRES works for any matrix, while CG requires symmetric positive-definite
-        Belos::BlockGmresSolMgr<Scalar, MultiVector, Operator> solver(problem, Teuchos::rcp(&belosList, false));
-        
-        // Solve
-        Belos::ReturnType ret;
-        try {
-            ret = solver.solve();
-        } catch (const std::exception& e) {
-            std::cerr << "Belos solver threw exception: " << e.what() << std::endl;
-            throw;
-        }
-        
-        iterations_ = solver.getNumIters();
-        residual_error_ = solver.achievedTol();
+        // belosList.set("Output Frequency", 50);
 
-        if (ret != Belos::Converged) {
-            // Log warning but don't throw - some applications may accept non-converged solutions
-            std::cerr << "Warning: Belos did not converge after " << iterations_ 
-                      << " iterations. Final residual: " << residual_error_ << std::endl;
-            // Uncomment to make non-convergence fatal:
-            // throw std::runtime_error("Belos did not converge");
-        }
+        Teuchos::RCP<Belos::SolverManager<Scalar, MultiVector, Operator>> solver =
+            Teuchos::rcp(new Belos::BlockGmresSolMgr<Scalar, MultiVector, Operator>(problem, Teuchos::rcp(&belosList, false)));
+
+        Belos::ReturnType ret = solver->solve();
         
-        // Copy result back
-        for(size_t i=0; i<localLen; ++i)
-        {
-            GlobalOrdinal gid = rowMap_->getGlobalElement(i);
-            if (gid < result.size()) {
-                result[gid] = x_data[i];
+        iterations_ = solver->getNumIters();
+        residual_error_ = solver->achievedTol();
+
+        // 6. Gather Solution X Back to Rank 0
+        Teuchos::RCP<MultiVector> X_source_final = Teuchos::rcp(new MultiVector(sourceMap, 1));
+        Tpetra::Import<LocalOrdinal, GlobalOrdinal, Node> importer(rowMap_, sourceMap);
+        X_source_final->doImport(*X_target, importer, Tpetra::INSERT);
+
+        // 7. Copy to result (on Rank 0) and Broadcast to all ranks
+        if (result.size() != numGlobalRows) {
+            result.resize(numGlobalRows);
+        }
+
+        if (comm_->getRank() == 0) {
+            auto x_data = X_source_final->getData(0);
+            for (size_t i = 0; i < (size_t)numGlobalRows; ++i) {
+               result(i) = x_data[i];
             }
         }
+        
+        // Broadcast solution to all processes
+        Teuchos::broadcast(*comm_, 0, static_cast<int>(result.size()), result.data());
     }
 }
