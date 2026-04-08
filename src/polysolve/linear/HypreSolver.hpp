@@ -71,6 +71,12 @@ namespace polysolve::linear
         HYPRE_ParCSRMatrix parcsr_A;
         
         double total_time;
+
+        int mpi_rank_ = 0;
+        int mpi_size_ = 1;
+        HYPRE_Int ilower_ = 0;   
+        HYPRE_Int iupper_ = 0;   
+        HYPRE_Int num_rows_ = 0; 
     };
 
 } // namespace polysolve::linear

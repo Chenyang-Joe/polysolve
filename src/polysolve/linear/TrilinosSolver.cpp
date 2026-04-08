@@ -124,8 +124,15 @@ namespace polysolve::linear
 
     void TrilinosSolver::factorize(const StiffnessMatrix &Ain)
     {
+        // TODO: distributed loading. Currently every MPI process receives the
+        // FULL Eigen matrix `Ain` and uses Tpetra::Export/Import below to push
+        // entries into its locally-owned rows. This means total memory =
+        // P * sizeof(full matrix), so memory does NOT scale down with more
+        // processes. For matrices approaching per-node RAM limits, the caller
+        // should instead load only its local row range (e.g. via parallel I/O
+        // or rank-0 scatter) and pass a pre-partitioned matrix here.
         POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
-        
+
         // 1. Setup distributed row map (DOF-aligned for MueLu)
         GlobalOrdinal numGlobalRows = Ain.rows();
         const GlobalOrdinal indexBase = 0;

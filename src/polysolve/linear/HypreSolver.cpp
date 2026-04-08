@@ -5,6 +5,7 @@
 
 #include <HYPRE_krylov.h>
 #include <HYPRE_utilities.h>
+#include <algorithm>
 
 #if defined(SPDLOG_FMT_EXTERNAL)
 #include <fmt/color.h>
@@ -32,11 +33,10 @@ namespace polysolve::linear
             char name[] = "";
             char *argv[] = {name};
             char **argvv = &argv[0];
-            int myid, num_procs;
             MPI_Init(&argc, &argvv);
-            MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-            MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
         }
+        MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank_);
+        MPI_Comm_size(MPI_COMM_WORLD, &mpi_size_); 
 #endif
     }
 
@@ -72,6 +72,14 @@ namespace polysolve::linear
 
     void HypreSolver::factorize(const StiffnessMatrix &Ain)
     {
+        // TODO: distributed loading. Currently every MPI process receives the
+        // FULL Eigen matrix `Ain` and only inserts its local rows via the
+        // `if (it.row() < ilower_ || it.row() > iupper_) continue;` filter
+        // below. This means total memory = P * sizeof(full matrix), so memory
+        // does NOT scale down with more processes. For matrices approaching
+        // per-node RAM limits, the caller should instead load only its local
+        // row range (e.g. via parallel I/O or rank-0 scatter) and pass a
+        // pre-partitioned matrix here.
         POLYSOLVE_SCOPED_STOPWATCH("factorize", total_time, *logger);
         assert(precond_num_ > 0);
 
@@ -85,7 +93,12 @@ namespace polysolve::linear
         const HYPRE_Int rows = Ain.rows();
         const HYPRE_Int cols = Ain.cols();
 #ifdef HYPRE_WITH_MPI
-        HYPRE_IJMatrixCreate(MPI_COMM_WORLD, 0, rows - 1, 0, cols - 1, &A);
+        num_rows_ = rows;
+        const HYPRE_Int base = rows / mpi_size_;      
+        const HYPRE_Int rem  = rows % mpi_size_;     
+        ilower_ = mpi_rank_ * base + std::min<HYPRE_Int>(mpi_rank_, rem);
+        iupper_ = ilower_ + base - 1 + (mpi_rank_ < rem ? 1 : 0);
+        HYPRE_IJMatrixCreate(MPI_COMM_WORLD, ilower_, iupper_, ilower_, iupper_, &A); 
 #else
         HYPRE_IJMatrixCreate(0, 0, rows - 1, 0, cols - 1, &A);
 #endif
@@ -100,6 +113,10 @@ namespace polysolve::linear
         {
             for (StiffnessMatrix::InnerIterator it(Ain, k); it; ++it)
             {
+#ifdef HYPRE_WITH_MPI
+                if (it.row() < ilower_ || it.row() > iupper_)
+                    continue;
+#endif
                 const HYPRE_Int i[1] = {it.row()};
                 const HYPRE_Int j[1] = {it.col()};
                 const HYPRE_Complex v[1] = {it.value()};
@@ -201,14 +218,14 @@ namespace polysolve::linear
         HYPRE_ParVector par_x;
 
 #ifdef HYPRE_WITH_MPI
-        HYPRE_IJVectorCreate(MPI_COMM_WORLD, 0, rhs.size() - 1, &b);
+        HYPRE_IJVectorCreate(MPI_COMM_WORLD, ilower_, iupper_, &b);
 #else
         HYPRE_IJVectorCreate(0, 0, rhs.size() - 1, &b);
 #endif
         HYPRE_IJVectorSetObjectType(b, HYPRE_PARCSR);
         HYPRE_IJVectorInitialize(b);
 #ifdef HYPRE_WITH_MPI
-        HYPRE_IJVectorCreate(MPI_COMM_WORLD, 0, rhs.size() - 1, &x);
+        HYPRE_IJVectorCreate(MPI_COMM_WORLD, ilower_, iupper_, &x);
 #else
         HYPRE_IJVectorCreate(0, 0, rhs.size() - 1, &x);
 #endif
@@ -217,15 +234,16 @@ namespace polysolve::linear
 
         assert(result.size() == rhs.size());
 
-        for (HYPRE_Int i = 0; i < rhs.size(); ++i)
-        {
-            const HYPRE_Int index[1] = {i};
-            const HYPRE_Complex v[1] = {HYPRE_Complex(rhs(i))};
-            const HYPRE_Complex z[1] = {HYPRE_Complex(result(i))};
-
-            HYPRE_IJVectorSetValues(b, 1, index, v);
-            HYPRE_IJVectorSetValues(x, 1, index, z);
-        }
+#ifdef HYPRE_WITH_MPI
+        // Batch set: nullptr indices means contiguous range starting at the
+        // vector's ilower (= ilower_), reading nvalues doubles from the buffer.
+        const HYPRE_Int local_n = iupper_ - ilower_ + 1;
+        HYPRE_IJVectorSetValues(b, local_n, nullptr, rhs.data()    + ilower_);
+        HYPRE_IJVectorSetValues(x, local_n, nullptr, result.data() + ilower_);
+#else
+        HYPRE_IJVectorSetValues(b, rhs.size(), nullptr, rhs.data());
+        HYPRE_IJVectorSetValues(x, rhs.size(), nullptr, result.data());
+#endif
 
         HYPRE_IJVectorAssemble(b);
         HYPRE_IJVectorGetObject(b, (void **)&par_b);
@@ -290,14 +308,33 @@ namespace polysolve::linear
         HYPRE_ParCSRPCGDestroy(solver);
 
         assert(result.size() == rhs.size());
-        for (HYPRE_Int i = 0; i < rhs.size(); ++i)
-        {
-            const HYPRE_Int index[1] = {i};
-            HYPRE_Complex v[1];
-            HYPRE_IJVectorGetValues(x, 1, index, v);
 
-            result(i) = v[0];
+#ifdef HYPRE_WITH_MPI
+        // Batch read: write the local segment directly into result[ilower_..iupper_]
+        const HYPRE_Int local_size = iupper_ - ilower_ + 1;
+        HYPRE_IJVectorGetValues(x, local_size, nullptr, result.data() + ilower_);
+
+        // Compute send/receive layout for Allgatherv (must match factorize() partitioning)
+        const HYPRE_Int base = num_rows_ / mpi_size_;
+        const HYPRE_Int rem  = num_rows_ % mpi_size_;
+        std::vector<int> recvcounts(mpi_size_);
+        std::vector<int> displs(mpi_size_);
+        for (int r = 0; r < mpi_size_; ++r)
+        {
+            const HYPRE_Int r_ilower = r * base + std::min<HYPRE_Int>(r, rem);
+            const HYPRE_Int r_iupper = r_ilower + base - 1 + (r < rem ? 1 : 0);
+            recvcounts[r] = static_cast<int>(r_iupper - r_ilower + 1);
+            displs[r]     = static_cast<int>(r_ilower);
         }
+
+        // MPI_IN_PLACE: each process's contribution is already at its slot in result;
+        // Allgatherv just fills in the other slots from peers. No extra buffer needed.
+        MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
+                       result.data(), recvcounts.data(), displs.data(),
+                       MPI_DOUBLE, MPI_COMM_WORLD);
+#else
+        HYPRE_IJVectorGetValues(x, rhs.size(), nullptr, result.data());
+#endif
 
         HYPRE_IJVectorDestroy(b);
         HYPRE_IJVectorDestroy(x);
