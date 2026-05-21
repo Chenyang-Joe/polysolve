@@ -1,6 +1,8 @@
 #include "TrilinosSolver.hpp"
 #include <string>
 #include <vector>
+#include <cstdlib>   // getenv
+#include <cstring>   // strcasecmp
 #include <unsupported/Eigen/SparseExtra>
 
 // POSIX headers for file descriptor manipulation
@@ -34,6 +36,39 @@
 
 namespace polysolve::linear
 {
+    namespace
+    {
+        // Parse POLYSOLVE_TRILINOS_KRYLOV. Accepts:
+        //   "" / "gmres"      → GMRES (default, BlockGmresSolMgr)
+        //   "cg" / "pcg"      → CG    (PseudoBlockCGSolMgr)
+        // Unknown values warn + fall back to GMRES.
+        TrilinosSolver::KrylovType read_trilinos_krylov_from_env()
+        {
+            const char *env = std::getenv("POLYSOLVE_TRILINOS_KRYLOV");
+            if (env == nullptr || env[0] == '\0') {
+                return TrilinosSolver::KrylovType::GMRES;
+            }
+            if (strcasecmp(env, "gmres") == 0) {
+                return TrilinosSolver::KrylovType::GMRES;
+            }
+            if (strcasecmp(env, "cg") == 0 || strcasecmp(env, "pcg") == 0) {
+                return TrilinosSolver::KrylovType::CG;
+            }
+            std::fprintf(stderr,
+                "polysolve: unknown POLYSOLVE_TRILINOS_KRYLOV='%s'; "
+                "falling back to gmres.\n", env);
+            return TrilinosSolver::KrylovType::GMRES;
+        }
+
+        const char *trilinos_krylov_name(TrilinosSolver::KrylovType k) {
+            switch (k) {
+                case TrilinosSolver::KrylovType::GMRES: return "gmres";
+                case TrilinosSolver::KrylovType::CG:    return "cg";
+            }
+            return "?";
+        }
+    } // anonymous namespace
+
     TrilinosSolver::TrilinosSolver()
     {
 #ifdef HAVE_MPI
@@ -54,12 +89,21 @@ namespace polysolve::linear
         // No MPI: single-process serial mode
         comm_ = Teuchos::rcp(new Teuchos::SerialComm<int>());
 #endif
-        
+
         if (!Tpetra::isInitialized()) {
             int argc = 0;
             char **argv = nullptr;
             Tpetra::initialize(&argc, &argv);
             tpetra_initialized_ = true;
+        }
+
+        // Pick Krylov method from env (default GMRES). JSON via set_parameters
+        // can override later. Announce only on rank 0 to keep mpirun output clean.
+        krylov_type_ = read_trilinos_krylov_from_env();
+        if (comm_->getRank() == 0) {
+            std::fprintf(stderr,
+                "[polysolve::TrilinosSolver] krylov=%s\n",
+                trilinos_krylov_name(krylov_type_));
         }
     }
     
@@ -110,6 +154,21 @@ namespace polysolve::linear
             if (params["Trilinos"].contains("is_nullspace"))
             {
                 is_nullspace_ = params["Trilinos"]["is_nullspace"];
+            }
+            // Krylov method: "gmres" (default) | "cg".
+            // Overrides POLYSOLVE_TRILINOS_KRYLOV from construction.
+            if (params["Trilinos"].contains("krylov"))
+            {
+                const std::string s = params["Trilinos"]["krylov"].get<std::string>();
+                if (strcasecmp(s.c_str(), "gmres") == 0) {
+                    krylov_type_ = KrylovType::GMRES;
+                } else if (strcasecmp(s.c_str(), "cg") == 0 || strcasecmp(s.c_str(), "pcg") == 0) {
+                    krylov_type_ = KrylovType::CG;
+                } else {
+                    std::fprintf(stderr,
+                        "polysolve: unknown Trilinos.krylov='%s'; keeping %s.\n",
+                        s.c_str(), trilinos_krylov_name(krylov_type_));
+                }
             }
         }
     }
@@ -286,8 +345,20 @@ namespace polysolve::linear
         belosList.set("Verbosity", Belos::Errors + Belos::Warnings);
         // belosList.set("Output Frequency", 50);
 
-        Teuchos::RCP<Belos::SolverManager<Scalar, MultiVector, Operator>> solver =
-            Teuchos::rcp(new Belos::BlockGmresSolMgr<Scalar, MultiVector, Operator>(problem, Teuchos::rcp(&belosList, false)));
+        // Pick Krylov method: GMRES (default, more robust) or CG (cheaper per
+        // iter for SPD problems). Both use the same MueLu SA-AMG preconditioner.
+        Teuchos::RCP<Belos::SolverManager<Scalar, MultiVector, Operator>> solver;
+        if (krylov_type_ == KrylovType::GMRES) {
+            solver = Teuchos::rcp(new Belos::BlockGmresSolMgr<Scalar, MultiVector, Operator>(
+                problem, Teuchos::rcp(&belosList, false)));
+        } else { // CG
+            // PseudoBlockCG is the single-RHS optimized CG implementation in
+            // Belos. (BlockCG is for multiple RHS; for our 1-column case
+            // PseudoBlock is the right choice — same iteration math, less
+            // per-iter overhead.)
+            solver = Teuchos::rcp(new Belos::PseudoBlockCGSolMgr<Scalar, MultiVector, Operator>(
+                problem, Teuchos::rcp(&belosList, false)));
+        }
 
         Belos::ReturnType ret = solver->solve();
         

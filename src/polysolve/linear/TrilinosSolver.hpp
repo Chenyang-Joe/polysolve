@@ -93,10 +93,28 @@ namespace polysolve::linear
         // Name of the solver type (for debugging purposes)
         virtual std::string name() const override { return "Trilinos GMRES + SA-AMG"; }
 
+        // Outer Krylov method. Switchable via:
+        //   JSON:  params["Trilinos"]["krylov"] = "gmres" | "cg"
+        //   ENV :  POLYSOLVE_TRILINOS_KRYLOV = gmres | cg
+        //
+        //   GMRES — default. Belos::BlockGmresSolMgr. Tolerates non-SPD
+        //           preconditioners and indefinite operators; uses more
+        //           memory (restart_dim × N).
+        //
+        //   CG    — Belos::PseudoBlockCGSolMgr. Cheaper per iter for SPD
+        //           matrices (which PolyFEM stiffness matrices are after
+        //           the Hessian PSD projection), often converges faster.
+        //           Requires both A and M (MueLu SA-AMG) to be SPD.
+        enum class KrylovType {
+            GMRES,
+            CG,
+        };
+
     protected:
         int numPDEs = 1; // 1 = scalar (Laplace), 2 or 3 = vector (Elasticity)
         int max_iter_ = 1000;
         double conv_tol_ = 1e-10;
+        KrylovType krylov_type_ = KrylovType::GMRES; // default unchanged
         size_t iterations_ = 0;
         double residual_error_ = 0.0;
         bool is_nullspace_ = true;

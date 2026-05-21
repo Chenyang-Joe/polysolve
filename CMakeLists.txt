@@ -86,6 +86,11 @@ option(POLYSOLVE_WITH_MKL           "Enable MKL library"  ${POLYSOLVE_NOT_ON_APP
 option(POLYSOLVE_WITH_CUSOLVER      "Enable cuSOLVER library"                           OFF)
 option(POLYSOLVE_WITH_PARDISO       "Enable Pardiso library"                            OFF)
 option(POLYSOLVE_WITH_HYPRE         "Enable hypre"                                       ON)
+# METIS is used by HypreSolver to compute graph-aware MPI row partitioning
+# (POLYSOLVE_HYPRE_PARTITION=metis env var). Without METIS, HypreSolver falls
+# back to a naive row-block partition which is fine for well-conditioned
+# matrices but breaks PCG on ill-conditioned ones at np >= 3 (subnormal gamma).
+option(POLYSOLVE_WITH_METIS         "Enable METIS graph partitioning for Hypre MPI"      ON)
 option(POLYSOLVE_WITH_AMGCL         "Use AMGCL"                                          ON)
 option(POLYSOLVE_WITH_SPECTRA       "Enable Spectra library"                             ON)
 option(POLYSOLVE_WITH_TRILINOS      "Enable Trilinos"                                    ON)
@@ -232,6 +237,18 @@ if(POLYSOLVE_WITH_HYPRE)
     target_compile_definitions(polysolve_linear PUBLIC POLYSOLVE_WITH_HYPRE)
     if(HYPRE_WITH_MPI)
         target_compile_definitions(polysolve_linear PUBLIC HYPRE_WITH_MPI)
+    endif()
+endif()
+
+# METIS (Apache 2.0, used only by HypreSolver for MPI graph partitioning)
+if(POLYSOLVE_WITH_HYPRE AND POLYSOLVE_WITH_METIS)
+    include(metis)
+    if(TARGET METIS::METIS)
+        target_link_libraries(polysolve_linear PRIVATE METIS::METIS)
+        target_compile_definitions(polysolve_linear PRIVATE POLYSOLVE_WITH_METIS)
+    else()
+        message(WARNING "METIS not found; falling back to row-block partition in HypreSolver. "
+                        "Install libmetis-dev (Ubuntu) or set CMAKE_PREFIX_PATH to a METIS install.")
     endif()
 endif()
 

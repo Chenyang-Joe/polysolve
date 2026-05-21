@@ -303,9 +303,9 @@
     },
     {
         "pointer": "/Hypre/max_iter",
-        "default": 1000,
+        "default": 5000,
         "type": "int",
-        "doc": "Maximum number of iterations."
+        "doc": "Maximum number of iterations. Edit this default (no rebuild needed; JSON is read at runtime via POLYSOLVE_LINEAR_SPEC) to sweep iteration budgets for Hypre."
     },
     {
         "pointer": "/Hypre/pre_max_iter",
