@@ -5,6 +5,7 @@
 
 #include <HYPRE_krylov.h>
 #include <HYPRE_utilities.h>
+#include <spdlog/spdlog.h>
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace polysolve::linear
@@ -269,6 +270,29 @@ namespace polysolve::linear
         /* Run info - needed logging turned on */
         HYPRE_PCGGetNumIterations(solver, &num_iterations);
         HYPRE_PCGGetFinalRelativeResidualNorm(solver, &final_res_norm);
+
+        /* Surface Hypre's internal error flag (e.g. "Subnormal gamma value in PCG",
+           "Reached max iterations in PCG before convergence") into spdlog so the
+           caller can see WHEN the solve failed without grepping Hypre's stderr.
+           Uses spdlog's default logger because this polysolve's HypreSolver has
+           no member logger handle. */
+        {
+            HYPRE_Int hypre_err = HYPRE_GetError();
+            if (hypre_err)
+            {
+                char hypre_err_msg[512] = {0};
+                HYPRE_DescribeError(hypre_err, hypre_err_msg);
+                spdlog::warn("Hypre PCG error {} ({}): final_res_norm={:.3e} num_iterations={}",
+                             (long long)hypre_err, hypre_err_msg,
+                             (double)final_res_norm, (long long)num_iterations);
+                HYPRE_ClearAllErrors();
+            }
+            else
+            {
+                spdlog::debug("Hypre PCG OK: final_res_norm={:.3e} num_iterations={}",
+                              (double)final_res_norm, (long long)num_iterations);
+            }
+        }
 
         // printf("\n");
         // printf("Iterations = %lld\n", num_iterations);
